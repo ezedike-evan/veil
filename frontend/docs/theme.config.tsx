@@ -27,15 +27,11 @@ const config: DocsThemeConfig = {
     'https://github.com/Miracle656/veil/tree/main/frontend/docs',
 
   footer: {
-    text: (
+    content: (
       <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.75rem', color: '#D6D2C4' }}>
         © {new Date().getFullYear()} Veil — Powered by Stellar Soroban · WebAuthn / FIDO2 · MIT
       </span>
     ),
-  },
-
-  useNextSeoProps() {
-    return { titleTemplate: '%s – Veil Docs' }
   },
 
   head: (
@@ -61,7 +57,7 @@ const config: DocsThemeConfig = {
   },
 
   editLink: {
-    text: 'Edit this page on GitHub',
+    content: 'Edit this page on GitHub',
   },
 
   feedback: {
@@ -71,7 +67,7 @@ const config: DocsThemeConfig = {
 
   banner: {
     key: 'phase-3-v3',
-    text: (
+    content: (
       <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '0.82rem' }}>
         Phase 3 (Factory Contract) is open for contributors —{' '}
         <a
