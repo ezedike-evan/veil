@@ -221,8 +221,11 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
                 setAddress(walletAddress);
                 localStorage.setItem('invisible_wallet_address', walletAddress);
                 return { walletAddress, alreadyDeployed: true };
-            } catch {
-                // Entry not found → proceed with deployment.
+            } catch (e: unknown) {
+                // Only proceed if the entry was genuinely absent.
+                // Any other error (network failure, RPC down) should bubble up.
+                const msg = e instanceof Error ? e.message : String(e);
+                if (!msg.toLowerCase().includes('not found')) throw e;
             }
 
             // ── Build transaction ─────────────────────────────────────────────
