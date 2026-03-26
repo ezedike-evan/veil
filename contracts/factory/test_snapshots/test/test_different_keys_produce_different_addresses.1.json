@@ -48,6 +48,19 @@
                               "symbol": "Deployed"
                             },
                             {
+                              "bytes": "07f9b2e3be6e3e7119a592103d62f0310144d18f7708ecbd3aef5d0ff4907a88"
+                            }
+                          ]
+                        },
+                        "val": "void"
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Deployed"
+                            },
+                            {
                               "bytes": "550baec2e009d8c4ba938306605e9c55657d613e13ee25e208736c90567b6d88"
                             }
                           ]
@@ -67,6 +80,81 @@
                         }
                       }
                     ]
+                  }
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CBB5IEQJT25R5BRGVOKPV7CJYV46ZRJHQQ3UWNBUKDPVBARXPDXKOX7I",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Signer"
+                },
+                {
+                  "bytes": "042ed2192f0f9275200acd34fbd8c6ce5a91a459488411320b4c6de3e6a22d7fa06f2374f60534a9009629714d063402a3c3ed60db057ef7999a7a31a78aebc0c7"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CBB5IEQJT25R5BRGVOKPV7CJYV46ZRJHQQ3UWNBUKDPVBARXPDXKOX7I",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Signer"
+                    },
+                    {
+                      "bytes": "042ed2192f0f9275200acd34fbd8c6ce5a91a459488411320b4c6de3e6a22d7fa06f2374f60534a9009629714d063402a3c3ed60db057ef7999a7a31a78aebc0c7"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CBB5IEQJT25R5BRGVOKPV7CJYV46ZRJHQQ3UWNBUKDPVBARXPDXKOX7I",
+            "key": "ledger_key_contract_instance",
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CBB5IEQJT25R5BRGVOKPV7CJYV46ZRJHQQ3UWNBUKDPVBARXPDXKOX7I",
+                "key": "ledger_key_contract_instance",
+                "durability": "persistent",
+                "val": {
+                  "contract_instance": {
+                    "executable": {
+                      "wasm": "be0cdfaa1432ed928911b8ae96196949ecba6856641994c2af540b1236734694"
+                    },
+                    "storage": null
                   }
                 }
               }
@@ -358,8 +446,55 @@
               }
             ],
             "data": {
-              "bytes": "040c901d423c831ca85e27c73c263ba132721bb9d7a84c4f0380b2a6756fd601331c8870234dec878504c174144fa4b14b66a651691606d8173e55bd37e381569e"
+              "bytes": "042ed2192f0f9275200acd34fbd8c6ce5a91a459488411320b4c6de3e6a22d7fa06f2374f60534a9009629714d063402a3c3ed60db057ef7999a7a31a78aebc0c7"
             }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "43d412099ebb1e8626ab94fafc49c579ecc52784374b343450df50823778eea7"
+              },
+              {
+                "symbol": "init"
+              }
+            ],
+            "data": {
+              "bytes": "042ed2192f0f9275200acd34fbd8c6ce5a91a459488411320b4c6de3e6a22d7fa06f2374f60534a9009629714d063402a3c3ed60db057ef7999a7a31a78aebc0c7"
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "43d412099ebb1e8626ab94fafc49c579ecc52784374b343450df50823778eea7",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "init"
+              }
+            ],
+            "data": "void"
           }
         }
       },
@@ -381,73 +516,7 @@
               }
             ],
             "data": {
-              "error": {
-                "contract": 3
-              }
-            }
-          }
-        }
-      },
-      "failed_call": true
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "error"
-              },
-              {
-                "error": {
-                  "contract": 3
-                }
-              }
-            ],
-            "data": {
-              "string": "escalating Ok(ScErrorType::Contract) frame-exit to Err"
-            }
-          }
-        }
-      },
-      "failed_call": true
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": null,
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "error"
-              },
-              {
-                "error": {
-                  "contract": 3
-                }
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "string": "contract try_call failed"
-                },
-                {
-                  "symbol": "deploy"
-                },
-                {
-                  "vec": [
-                    {
-                      "bytes": "040c901d423c831ca85e27c73c263ba132721bb9d7a84c4f0380b2a6756fd601331c8870234dec878504c174144fa4b14b66a651691606d8173e55bd37e381569e"
-                    }
-                  ]
-                }
-              ]
+              "address": "CBB5IEQJT25R5BRGVOKPV7CJYV46ZRJHQQ3UWNBUKDPVBARXPDXKOX7I"
             }
           }
         }
