@@ -1,4 +1,4 @@
-use soroban_sdk::{Env, Bytes, BytesN};
+use soroban_sdk::{Bytes, BytesN, Env};
 use p256::ecdsa::{VerifyingKey, Signature, signature::hazmat::PrehashVerifier};
 use sha2::{Sha256, Digest};
 use crate::WalletError;
@@ -53,11 +53,125 @@ fn challenge_is_present(client_data_json: &Bytes, signature_payload: &[u8; 32]) 
     false
 }
 
+// ── Domain binding checks ─────────────────────────────────────────────────────
+
+/// Assert that `auth_data[0..32]` equals `SHA-256(rp_id)`.
+///
+/// The WebAuthn spec defines the first 32 bytes of authenticatorData as the
+/// rpIdHash — the SHA-256 of the relying party identifier (e.g. "veil.app").
+/// This check ensures the assertion was produced for this wallet's domain and
+/// cannot be replayed from a different origin.
+///
+/// Called from `__check_auth` after signature verification.
+pub fn verify_rp_id(rp_id: &Bytes, auth_data: &Bytes) -> Result<(), WalletError> {
+    // auth_data must be at least 37 bytes (rpIdHash + flags + signCount).
+    // We only need the first 32 here.
+    if auth_data.len() < 32 {
+        return Err(WalletError::RpIdMismatch);
+    }
+
+    // Compute SHA-256(rp_id)
+    let expected: [u8; 32] = {
+        let mut h = Sha256::new();
+        for i in 0..rp_id.len() {
+            h.update([rp_id.get_unchecked(i)]);
+        }
+        h.finalize().into()
+    };
+
+    // Compare byte-by-byte against auth_data[0..32]
+    for i in 0..32u32 {
+        if auth_data.get_unchecked(i) != expected[i as usize] {
+            return Err(WalletError::RpIdMismatch);
+        }
+    }
+
+    Ok(())
+}
+
+/// Assert that the `origin` field embedded in `clientDataJSON` equals `expected_origin`.
+///
+/// WebAuthn embeds the page origin inside clientDataJSON as:
+///   `"origin":"https://veil.app"`
+///
+/// We parse this with a simple byte-slice search — no JSON parser needed and
+/// no `serde` dependency (which would pull in `std`).
+///
+/// Called from `__check_auth` after signature verification.
+pub fn verify_origin(
+    client_data_json: &Bytes,
+    expected_origin: &Bytes,
+) -> Result<(), WalletError> {
+    // The literal bytes we search for inside clientDataJSON.
+    // Using the full key + colon + opening quote so we match the field precisely.
+    let needle = b"\"origin\":\"";
+    let n_len = needle.len(); // 10
+    let h_len = client_data_json.len() as usize;
+
+    // Locate the needle — find the index where the origin value starts (just after `"origin":"`)
+    let value_start: Option<usize> = 'search: {
+        for start in 0..h_len {
+            if start + n_len > h_len {
+                break;
+            }
+            let mut matched = true;
+            for j in 0..n_len {
+                if client_data_json.get_unchecked((start + j) as u32) != needle[j] {
+                    matched = false;
+                    break;
+                }
+            }
+            if matched {
+                break 'search Some(start + n_len);
+            }
+        }
+        None
+    };
+
+    let value_start = value_start.ok_or(WalletError::OriginMismatch)?;
+
+    // Find the closing `"` that terminates the origin value
+    let value_end: Option<usize> = {
+        let mut found = None;
+        for i in value_start..h_len {
+            if client_data_json.get_unchecked(i as u32) == b'"' {
+                found = Some(i);
+                break;
+            }
+        }
+        found
+    };
+
+    let value_end = value_end.ok_or(WalletError::OriginMismatch)?;
+
+    // Length must match exactly before doing the byte comparison
+    let extracted_len = value_end - value_start;
+    if extracted_len != expected_origin.len() as usize {
+        return Err(WalletError::OriginMismatch);
+    }
+
+    // Compare the extracted origin bytes against the stored expected origin
+    for i in 0..extracted_len {
+        if client_data_json.get_unchecked((value_start + i) as u32)
+            != expected_origin.get_unchecked(i as u32)
+        {
+            return Err(WalletError::OriginMismatch);
+        }
+    }
+
+    Ok(())
+}
+
+// ── Signature verification ────────────────────────────────────────────────────
+
 /// Verify a full WebAuthn ES256 assertion against a Soroban signature_payload.
 ///
 /// The authenticator signs SHA256(authData || SHA256(clientDataJSON)).
 /// The clientDataJSON must contain base64url(signature_payload) as its challenge field,
 /// binding this assertion to the exact Soroban authorization entry being authorized.
+///
+/// Domain binding (rpIdHash and origin) is verified separately in `__check_auth`
+/// after this function returns, to avoid leaking timing information on failure.
 pub fn verify_webauthn(
     _env: &Env,
     signature_payload: &BytesN<32>,

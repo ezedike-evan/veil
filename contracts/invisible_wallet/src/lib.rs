@@ -12,13 +12,19 @@ mod storage;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum WalletError {
-    AlreadyInitialized       = 1,
-    InvalidSignatureFormat   = 2,
-    SignerNotAuthorized      = 3,
-    InvalidPublicKey         = 4,
-    InvalidSignature         = 5,
+    AlreadyInitialized          = 1,
+    InvalidSignatureFormat      = 2,
+    SignerNotAuthorized         = 3,
+    InvalidPublicKey            = 4,
+    InvalidSignature            = 5,
     SignatureVerificationFailed = 6,
-    InvalidChallenge         = 7,
+    InvalidChallenge            = 7,
+    /// The rpIdHash in authenticatorData does not match SHA-256(stored rp_id).
+    /// This means the assertion was produced for a different domain.
+    RpIdMismatch                = 8,
+    /// The origin field in clientDataJSON does not match the stored origin.
+    /// This means the assertion was produced on a different website.
+    OriginMismatch              = 9,
 }
 
 #[contract]
@@ -26,11 +32,27 @@ pub struct InvisibleWallet;
 
 #[contractimpl]
 impl InvisibleWallet {
-    pub fn init(env: Env, initial_signer: BytesN<65>) -> Result<(), WalletError> {
+    /// Initialise the wallet with its first signer and domain-binding parameters.
+    ///
+    /// `rp_id`   — the WebAuthn relying party ID (e.g. `"localhost"` for dev,
+    ///             `"veil.app"` for production). Must match the domain that
+    ///             serves the frontend. Keep it configurable — do not hardcode.
+    ///
+    /// `origin`  — the exact WebAuthn origin (e.g. `"https://veil.app"`).
+    ///             Must match the `origin` field the browser embeds in every
+    ///             clientDataJSON for this deployment.
+    pub fn init(
+        env: Env,
+        initial_signer: BytesN<65>,
+        rp_id: Bytes,
+        origin: Bytes,
+    ) -> Result<(), WalletError> {
         if storage::has_signer(&env, &initial_signer) {
             return Err(WalletError::AlreadyInitialized);
         }
         storage::add_signer(&env, &initial_signer);
+        storage::set_rp_id(&env, &rp_id);
+        storage::set_origin(&env, &origin);
         Ok(())
     }
 
@@ -56,6 +78,16 @@ impl InvisibleWallet {
     ///   [1] Bytes       — WebAuthn authenticatorData
     ///   [2] Bytes       — WebAuthn clientDataJSON (must contain base64url(signature_payload) as challenge)
     ///   [3] BytesN<64>  — raw P-256 ECDSA signature (r || s)
+    ///
+    /// Verification order:
+    ///   1. Parse and validate signature format
+    ///   2. Check signer is registered
+    ///   3. Verify ECDSA signature + challenge binding  (`verify_webauthn`)
+    ///   4. Verify rpIdHash binding                    (`verify_rp_id`)    → RpIdMismatch
+    ///   5. Verify origin binding                      (`verify_origin`)   → OriginMismatch
+    ///
+    /// Steps 4 and 5 run after step 3 so that a bad domain does not produce
+    /// a faster failure path than a bad signature (timing side-channel).
     pub fn __check_auth(
         env: Env,
         signature_payload: BytesN<32>,
@@ -87,7 +119,29 @@ impl InvisibleWallet {
             return Err(WalletError::SignerNotAuthorized);
         }
 
-        auth::verify_webauthn(&env, &signature_payload, public_key, auth_data, client_data_json, sig_bytes)
+        // Step 3 — ECDSA + challenge verification.
+        // Clone auth_data and client_data_json so they remain available for
+        // the domain-binding checks below.
+        auth::verify_webauthn(
+            &env,
+            &signature_payload,
+            public_key,
+            auth_data.clone(),
+            client_data_json.clone(),
+            sig_bytes,
+        )?;
+
+        // Step 4 — RP ID binding.
+        // Ensures auth_data[0..32] == SHA-256(stored rp_id).
+        let rp_id = storage::get_rp_id(&env).ok_or(WalletError::RpIdMismatch)?;
+        auth::verify_rp_id(&rp_id, &auth_data)?;
+
+        // Step 5 — Origin binding.
+        // Ensures the "origin" field in clientDataJSON matches the stored origin.
+        let origin = storage::get_origin(&env).ok_or(WalletError::OriginMismatch)?;
+        auth::verify_origin(&client_data_json, &origin)?;
+
+        Ok(())
     }
 
     pub fn has_signer(env: Env, key: BytesN<65>) -> bool {
@@ -115,34 +169,32 @@ mod test {
     }
 
     /// Build a minimal valid WebAuthn test fixture for a given payload and signing key.
-    /// Returns (auth_data_bytes, client_data_json_bytes, message_hash, sig_bytes).
+    /// `rp_id_raw` is used to compute the correct rpIdHash for auth_data[0..32].
+    /// Returns (auth_data_bytes, challenge_b64, sig_bytes).
     fn make_webauthn_fixture(
         signing_key: &SigningKey,
         payload: &[u8; 32],
-    ) -> ([u8; 37], [u8; 43], [u8; 32], [u8; 64]) {
-        // Minimal authData: rpIdHash(32) + flags(1) + signCount(4) = 37 bytes
-        let auth_data = [0u8; 37];
+        rp_id_raw: &[u8],
+    ) -> ([u8; 37], [u8; 43], [u8; 64]) {
+        // auth_data[0..32] = SHA-256(rp_id), flags(1) + signCount(4)
+        let rp_id_hash: [u8; 32] = {
+            let mut h = Sha256::new();
+            h.update(rp_id_raw);
+            h.finalize().into()
+        };
+        let mut auth_data = [0u8; 37];
+        auth_data[..32].copy_from_slice(&rp_id_hash);
 
         // clientDataJSON challenge must be base64url(payload)
         // For payload = [7u8; 32]: base64url = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
         let challenge_b64 = *b"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
 
-        // SHA256(clientDataJSON) — we inline the JSON for the test
-        let client_data_prefix  = b"{\"type\":\"webauthn.get\",\"challenge\":\"";
-        let client_data_suffix  = b"\",\"origin\":\"https://test.example\",\"crossOrigin\":false}";
-        let mut client_data_hash_input = [0u8; 256];
-        let mut pos = 0;
-        client_data_hash_input[pos..pos + client_data_prefix.len()].copy_from_slice(client_data_prefix);
-        pos += client_data_prefix.len();
-        client_data_hash_input[pos..pos + 43].copy_from_slice(&challenge_b64);
-        pos += 43;
-        client_data_hash_input[pos..pos + client_data_suffix.len()].copy_from_slice(client_data_suffix);
-        pos += client_data_suffix.len();
-        let client_data_json_bytes = &client_data_hash_input[..pos];
+        // Build the full clientDataJSON to hash
+        let client_data_json_bytes = build_client_data_json_raw(&challenge_b64);
 
         let client_data_hash: [u8; 32] = {
             let mut h = Sha256::new();
-            h.update(client_data_json_bytes);
+            h.update(&client_data_json_bytes);
             h.finalize().into()
         };
 
@@ -157,24 +209,36 @@ mod test {
         let sig: P256Sig = signing_key.sign_prehash(&message_hash).unwrap();
         let sig_bytes: [u8; 64] = sig.to_bytes().into();
 
-        // Truncate client_data_json_bytes to a fixed-size array for returning
-        let mut cdj = [0u8; 43];
-        // We return the challenge_b64 as a proxy; tests build the full Bytes directly
-        cdj.copy_from_slice(&challenge_b64);
-
-        (auth_data, cdj, message_hash, sig_bytes)
+        (auth_data, challenge_b64, sig_bytes)
     }
 
-    /// Build the full clientDataJSON Bytes for Soroban from its parts.
-    fn build_client_data_json(env: &Env, challenge_b64: &[u8; 43]) -> Bytes {
+    /// Build the raw clientDataJSON bytes (for hashing in test fixtures).
+    fn build_client_data_json_raw(challenge_b64: &[u8; 43]) -> Vec<u8> {
         let prefix = b"{\"type\":\"webauthn.get\",\"challenge\":\"";
         let suffix = b"\",\"origin\":\"https://test.example\",\"crossOrigin\":false}";
+        let mut out = Vec::new();
+        out.extend_from_slice(prefix);
+        out.extend_from_slice(challenge_b64);
+        out.extend_from_slice(suffix);
+        out
+    }
+
+    /// Build the Soroban Bytes version of clientDataJSON.
+    fn build_client_data_json(env: &Env, challenge_b64: &[u8; 43]) -> Bytes {
+        let raw = build_client_data_json_raw(challenge_b64);
         let mut cdj = Bytes::new(env);
-        for &b in prefix  { cdj.push_back(b); }
-        for &b in challenge_b64 { cdj.push_back(b); }
-        for &b in suffix  { cdj.push_back(b); }
+        for &b in &raw { cdj.push_back(b); }
         cdj
     }
+
+    /// Helper: bytes from a string slice
+    fn bytes_from_str(env: &Env, s: &str) -> Bytes {
+        let mut b = Bytes::new(env);
+        for &byte in s.as_bytes() { b.push_back(byte); }
+        b
+    }
+
+    // ── Existing tests (updated to pass rp_id + origin to init) ──────────────
 
     #[test]
     fn test_init_registers_signer() {
@@ -182,7 +246,9 @@ mod test {
         let contract_id = env.register_contract(None, InvisibleWallet);
         let client = InvisibleWalletClient::new(&env, &contract_id);
         let (_, pub_bytes) = test_keypair();
-        client.init(&BytesN::from_array(&env, &pub_bytes));
+        let rp_id  = bytes_from_str(&env, "localhost");
+        let origin = bytes_from_str(&env, "https://localhost:5173");
+        client.init(&BytesN::from_array(&env, &pub_bytes), &rp_id, &origin);
     }
 
     #[test]
@@ -192,8 +258,13 @@ mod test {
         let client = InvisibleWalletClient::new(&env, &contract_id);
         let (_, pub_bytes) = test_keypair();
         let pub_key = BytesN::from_array(&env, &pub_bytes);
-        client.init(&pub_key);
-        assert_eq!(client.try_init(&pub_key), Err(Ok(WalletError::AlreadyInitialized)));
+        let rp_id  = bytes_from_str(&env, "localhost");
+        let origin = bytes_from_str(&env, "https://localhost:5173");
+        client.init(&pub_key, &rp_id, &origin);
+        assert_eq!(
+            client.try_init(&pub_key, &rp_id, &origin),
+            Err(Ok(WalletError::AlreadyInitialized))
+        );
     }
 
     #[test]
@@ -202,8 +273,8 @@ mod test {
         let (signing_key, pub_bytes) = test_keypair();
         let payload = [7u8; 32];
 
-        let (auth_data_raw, challenge_b64, _, sig_bytes) =
-            make_webauthn_fixture(&signing_key, &payload);
+        let (auth_data_raw, challenge_b64, sig_bytes) =
+            make_webauthn_fixture(&signing_key, &payload, b"localhost");
 
         let result = auth::verify_webauthn(
             &env,
@@ -228,13 +299,13 @@ mod test {
         };
         let payload = [7u8; 32];
 
-        let (auth_data_raw, challenge_b64, _, sig_bytes) =
-            make_webauthn_fixture(&signing_key, &payload);
+        let (auth_data_raw, challenge_b64, sig_bytes) =
+            make_webauthn_fixture(&signing_key, &payload, b"localhost");
 
         let result = auth::verify_webauthn(
             &env,
             &BytesN::from_array(&env, &payload),
-            BytesN::from_array(&env, &pub_bytes_wrong), // wrong key
+            BytesN::from_array(&env, &pub_bytes_wrong),
             Bytes::from_array(&env, &auth_data_raw),
             build_client_data_json(&env, &challenge_b64),
             BytesN::from_array(&env, &sig_bytes),
@@ -248,8 +319,8 @@ mod test {
         let (signing_key, pub_bytes) = test_keypair();
         let payload = [7u8; 32];
 
-        let (auth_data_raw, challenge_b64, _, sig_bytes) =
-            make_webauthn_fixture(&signing_key, &payload);
+        let (auth_data_raw, challenge_b64, sig_bytes) =
+            make_webauthn_fixture(&signing_key, &payload, b"localhost");
 
         // Pass a different payload — challenge won't match
         let wrong_payload = [8u8; 32];
@@ -271,8 +342,8 @@ mod test {
         let (signing_key, pub_bytes) = test_keypair();
         let payload = [7u8; 32];
 
-        let (_, challenge_b64, _, sig_bytes) =
-            make_webauthn_fixture(&signing_key, &payload);
+        let (_, challenge_b64, sig_bytes) =
+            make_webauthn_fixture(&signing_key, &payload, b"localhost");
 
         // Use different authData than what was signed
         let tampered_auth_data = [0xffu8; 37];
@@ -286,5 +357,90 @@ mod test {
             BytesN::from_array(&env, &sig_bytes),
         );
         assert_eq!(result, Err(WalletError::SignatureVerificationFailed));
+    }
+
+    // ── New tests: domain binding ─────────────────────────────────────────────
+
+    /// RpIdMismatch: auth_data[0..32] is SHA-256("localhost") but we store "veil.app".
+    #[test]
+    fn test_rp_id_mismatch() {
+        let env = Env::default();
+
+        // auth_data is built with SHA-256("localhost") as the rpIdHash
+        let rp_id_hash: [u8; 32] = {
+            let mut h = Sha256::new();
+            h.update(b"localhost");
+            h.finalize().into()
+        };
+        let mut auth_data = [0u8; 37];
+        auth_data[..32].copy_from_slice(&rp_id_hash);
+
+        // But stored rp_id is "veil.app" — different domain
+        let stored_rp_id = bytes_from_str(&env, "veil.app");
+
+        let auth_data_bytes = {
+            let mut b = Bytes::new(&env);
+            for &byte in &auth_data { b.push_back(byte); }
+            b
+        };
+
+        let result = auth::verify_rp_id(&stored_rp_id, &auth_data_bytes);
+        assert_eq!(result, Err(WalletError::RpIdMismatch));
+    }
+
+    /// OriginMismatch: clientDataJSON has `"origin":"https://test.example"` but
+    /// stored origin is `"https://veil.app"`.
+    #[test]
+    fn test_origin_mismatch() {
+        let env = Env::default();
+
+        // clientDataJSON embeds origin = "https://test.example"
+        let challenge_b64 = *b"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+        let client_data_json = build_client_data_json(&env, &challenge_b64);
+
+        // But stored origin is "https://veil.app"
+        let stored_origin = bytes_from_str(&env, "https://veil.app");
+
+        let result = auth::verify_origin(&client_data_json, &stored_origin);
+        assert_eq!(result, Err(WalletError::OriginMismatch));
+    }
+
+    /// Sanity check: verify_rp_id passes when rp_id matches auth_data[0..32].
+    #[test]
+    fn test_rp_id_match() {
+        let env = Env::default();
+
+        let rp_id_hash: [u8; 32] = {
+            let mut h = Sha256::new();
+            h.update(b"localhost");
+            h.finalize().into()
+        };
+        let mut auth_data = [0u8; 37];
+        auth_data[..32].copy_from_slice(&rp_id_hash);
+
+        let stored_rp_id = bytes_from_str(&env, "localhost");
+        let auth_data_bytes = {
+            let mut b = Bytes::new(&env);
+            for &byte in &auth_data { b.push_back(byte); }
+            b
+        };
+
+        let result = auth::verify_rp_id(&stored_rp_id, &auth_data_bytes);
+        assert!(result.is_ok());
+    }
+
+    /// Sanity check: verify_origin passes when origin matches the stored value.
+    #[test]
+    fn test_origin_match() {
+        let env = Env::default();
+
+        let challenge_b64 = *b"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+        let client_data_json = build_client_data_json(&env, &challenge_b64);
+
+        // clientDataJSON has origin "https://test.example" — store the same
+        let stored_origin = bytes_from_str(&env, "https://test.example");
+
+        let result = auth::verify_origin(&client_data_json, &stored_origin);
+        assert!(result.is_ok());
     }
 }
