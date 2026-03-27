@@ -22,6 +22,8 @@ pub enum DataKey {
     /// The expected WebAuthn origin (e.g. "https://veil.app").
     /// Stored at init time; extracted from clientDataJSON and compared in __check_auth.
     Origin,
+    /// Stores a PendingRecovery struct while a guardian recovery is in progress.
+    RecoveryPending,
 }
 
 // ── Signers (Map-based) ──────────────────────────────────────────────────────

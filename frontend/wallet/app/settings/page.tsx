@@ -1,0 +1,232 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { Keypair } from 'stellar-sdk'
+import { VeilLogo } from '@/components/VeilLogo'
+import { useInvisibleWallet } from '@veil/sdk'
+
+const CONFIG = {
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  factoryContractId: process.env.NEXT_PUBLIC_FACTORY_CONTRACT_ID ?? '',
+  rpId: typeof window !== 'undefined' ? window.location.hostname : 'localhost',
+  origin: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000',
+}
+
+type Section = 'overview' | 'add-signer' | 'guardian'
+
+export default function SettingsPage() {
+  const router = useRouter()
+  const [address, setAddress] = useState<string | null>(null)
+  const [section, setSection] = useState<Section>('overview')
+  const [status, setStatus] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  // Guardian form
+  const [guardianAddress, setGuardianAddress] = useState('')
+
+  const wallet = useInvisibleWallet({
+    ...CONFIG,
+    contractId: address ?? '',
+  })
+
+  useEffect(() => {
+    const addr = sessionStorage.getItem('veil_address')
+    if (!addr) { router.replace('/'); return }
+    setAddress(addr)
+  }, [router])
+
+  function getSignerKeypair(): Keypair {
+    const secret = sessionStorage.getItem('veil_signer_secret')
+    if (!secret) throw new Error('No signer key in session')
+    return Keypair.fromSecret(secret)
+  }
+
+  async function handleAddSigner() {
+    setLoading(true)
+    setStatus(null)
+    try {
+      const signerKeypair = getSignerKeypair()
+      // register() returns the new passkey public key bytes via WebAuthn
+      const result = await wallet.register()
+      if (!result?.publicKeyBytes) throw new Error('Registration returned no public key')
+      const res = await wallet.addSigner(signerKeypair, result.publicKeyBytes)
+      setStatus(`New signer added at index ${res.signerIndex}`)
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleSetGuardian() {
+    if (!guardianAddress.startsWith('G') || guardianAddress.length !== 56) {
+      setStatus('Enter a valid Stellar G... address')
+      return
+    }
+    setLoading(true)
+    setStatus(null)
+    try {
+      const signerKeypair = getSignerKeypair()
+      await wallet.setGuardian(signerKeypair, guardianAddress)
+      setStatus('Guardian set successfully')
+      setGuardianAddress('')
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const shortAddr = address ? `${address.slice(0, 8)}...${address.slice(-8)}` : '—'
+
+  return (
+    <div className="wallet-shell">
+      {/* Nav */}
+      <nav className="wallet-nav">
+        <button
+          onClick={() => section === 'overview' ? router.push('/dashboard') : setSection('overview')}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--off-white)', display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.875rem' }}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          {section === 'overview' ? 'Dashboard' : 'Settings'}
+        </button>
+        <VeilLogo size={22} />
+        <div style={{ width: 40 }} />
+      </nav>
+
+      <main className="wallet-main">
+        {/* Overview */}
+        {section === 'overview' && (
+          <>
+            <h2 style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '1.75rem', marginBottom: '0.375rem' }}>
+              Security
+            </h2>
+            <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)', marginBottom: '2rem' }}>
+              Manage signers, recovery, and wallet settings
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {/* Wallet address */}
+              <div className="card">
+                <p style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', fontFamily: 'Anton, Impact, sans-serif', letterSpacing: '0.06em', marginBottom: '0.625rem' }}>
+                  WALLET
+                </p>
+                <p style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.875rem', wordBreak: 'break-all', color: 'var(--gold)' }}>
+                  {shortAddr}
+                </p>
+              </div>
+
+              {/* Add signer card */}
+              <button
+                className="card"
+                onClick={() => { setSection('add-signer'); setStatus(null) }}
+                style={{ textAlign: 'left', cursor: 'pointer', width: '100%', border: '1px solid var(--border-dim)', background: 'var(--surface)' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <p style={{ fontWeight: 500, fontSize: '0.9375rem' }}>Add signer</p>
+                    <p style={{ fontSize: '0.8125rem', color: 'rgba(246,247,248,0.4)', marginTop: '0.25rem' }}>
+                      Register a second device with a new passkey
+                    </p>
+                  </div>
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+                    <path d="M6 3l5 5-5 5" stroke="rgba(246,247,248,0.3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+              </button>
+
+              {/* Guardian card */}
+              <button
+                className="card"
+                onClick={() => { setSection('guardian'); setStatus(null) }}
+                style={{ textAlign: 'left', cursor: 'pointer', width: '100%', border: '1px solid var(--border-dim)', background: 'var(--surface)' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <p style={{ fontWeight: 500, fontSize: '0.9375rem' }}>Guardian recovery</p>
+                    <p style={{ fontSize: '0.8125rem', color: 'rgba(246,247,248,0.4)', marginTop: '0.25rem' }}>
+                      Set a trusted account to recover access if you lose your device
+                    </p>
+                  </div>
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+                    <path d="M6 3l5 5-5 5" stroke="rgba(246,247,248,0.3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Add signer */}
+        {section === 'add-signer' && (
+          <>
+            <h2 style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '1.75rem', marginBottom: '0.75rem' }}>
+              Add signer
+            </h2>
+            <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)', marginBottom: '2rem', lineHeight: 1.6 }}>
+              This will prompt a passkey registration on this device. Once confirmed, the new passkey will be added to your wallet on-chain.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {status && (
+                <div className="card-md">
+                  <p style={{ fontSize: '0.875rem', color: status.includes('index') ? 'var(--teal)' : 'rgba(246,247,248,0.6)' }}>
+                    {status}
+                  </p>
+                </div>
+              )}
+              <button className="btn-gold" onClick={handleAddSigner} disabled={loading}>
+                {loading ? <span className="spinner" /> : 'Register new passkey'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Guardian */}
+        {section === 'guardian' && (
+          <>
+            <h2 style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '1.75rem', marginBottom: '0.75rem' }}>
+              Guardian recovery
+            </h2>
+            <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)', marginBottom: '2rem', lineHeight: 1.6 }}>
+              A guardian can initiate a 3-day timelock recovery if you lose all your devices. They cannot access your wallet without your confirmation.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', display: 'block', marginBottom: '0.5rem', fontFamily: 'Anton, Impact, sans-serif', letterSpacing: '0.06em' }}>
+                  GUARDIAN STELLAR ADDRESS
+                </label>
+                <input
+                  className="input-field mono"
+                  type="text"
+                  placeholder="G..."
+                  value={guardianAddress}
+                  onChange={e => setGuardianAddress(e.target.value.trim())}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+
+              {status && (
+                <div className="card-md">
+                  <p style={{ fontSize: '0.875rem', color: status.includes('success') ? 'var(--teal)' : 'rgba(246,247,248,0.6)' }}>
+                    {status}
+                  </p>
+                </div>
+              )}
+
+              <button className="btn-gold" onClick={handleSetGuardian} disabled={loading}>
+                {loading ? <span className="spinner" /> : 'Set guardian'}
+              </button>
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  )
+}
