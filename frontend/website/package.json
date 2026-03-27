@@ -16,7 +16,6 @@
     "autoprefixer": "^10.4.19",
     "framer-motion": "^11.3.19",
     "gsap": "^3.12.5",
-    "invisible-wallet-sdk": "file:../../sdk",
     "lucide-react": "^0.441.0",
     "next": "^14.2.5",
     "postcss": "^8.4.39",
