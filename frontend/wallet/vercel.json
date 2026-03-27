@@ -1,0 +1,5 @@
+{
+  "buildCommand": "cd ../../ && npm install --prefix frontend/wallet && npm run build --prefix frontend/wallet",
+  "outputDirectory": "frontend/wallet/.next",
+  "framework": "nextjs"
+}

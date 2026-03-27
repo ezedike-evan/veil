@@ -33,6 +33,14 @@ pub enum WalletError {
     CannotRemoveLastSigner      = 10,
     /// The signer index does not exist in the signers map.
     SignerNotFound              = 11,
+    /// Guardian recovery was requested but no guardian is set on this wallet.
+    NoGuardianSet               = 12,
+    /// A recovery is already pending — cannot start another one.
+    RecoveryAlreadyPending      = 13,
+    /// No recovery is pending — nothing to complete or cancel.
+    RecoveryNotPending          = 14,
+    /// The recovery timelock has not yet expired.
+    RecoveryTimelockActive      = 15,
 }
 
 #[contract]
@@ -42,11 +50,11 @@ pub struct InvisibleWallet;
 impl InvisibleWallet {
     /// Initialise the wallet with its first signer and domain-binding parameters.
     ///
-    /// `rp_id`   â€” the WebAuthn relying party ID (e.g. `"localhost"` for dev,
+    /// `rp_id`   â€" the WebAuthn relying party ID (e.g. `"localhost"` for dev,
     ///             `"veil.app"` for production). Must match the domain that
-    ///             serves the frontend. Keep it configurable â€” do not hardcode.
+    ///             serves the frontend. Keep it configurable â€" do not hardcode.
     ///
-    /// `origin`  â€” the exact WebAuthn origin (e.g. `"https://veil.app"`).
+    /// `origin`  â€" the exact WebAuthn origin (e.g. `"https://veil.app"`).
     ///             Must match the `origin` field the browser embeds in every
     ///             clientDataJSON for this deployment.
     pub fn init(
@@ -91,17 +99,17 @@ impl InvisibleWallet {
     /// Called by the Soroban runtime to authorize a transaction.
     ///
     /// The `signature` Val must encode a Vec<Val> with 4 elements:
-    ///   [0] BytesN<65>  â€” uncompressed P-256 public key (0x04 || x || y)
-    ///   [1] Bytes       â€” WebAuthn authenticatorData
-    ///   [2] Bytes       â€” WebAuthn clientDataJSON (must contain base64url(signature_payload) as challenge)
-    ///   [3] BytesN<64>  â€” raw P-256 ECDSA signature (r || s)
+    ///   [0] BytesN<65>  â€" uncompressed P-256 public key (0x04 || x || y)
+    ///   [1] Bytes       â€" WebAuthn authenticatorData
+    ///   [2] Bytes       â€" WebAuthn clientDataJSON (must contain base64url(signature_payload) as challenge)
+    ///   [3] BytesN<64>  â€" raw P-256 ECDSA signature (r || s)
     ///
     /// Verification order:
     ///   1. Parse and validate signature format
     ///   2. Check signer is registered (iterates all signers, short-circuits on first match)
     ///   3. Verify ECDSA signature + challenge binding  (`verify_webauthn`)
-    ///   4. Verify rpIdHash binding                    (`verify_rp_id`)    â†’ RpIdMismatch
-    ///   5. Verify origin binding                      (`verify_origin`)   â†’ OriginMismatch
+    ///   4. Verify rpIdHash binding                    (`verify_rp_id`)    â†' RpIdMismatch
+    ///   5. Verify origin binding                      (`verify_origin`)   â†' OriginMismatch
     ///
     /// Steps 4 and 5 run after step 3 so that a bad domain does not produce
     /// a faster failure path than a bad signature (timing side-channel).
@@ -254,11 +262,8 @@ impl InvisibleWallet {
             return Err(WalletError::RecoveryTimelockActive);
         }
 
-        // Replace the signer: store the new public key as the active signer
-        env.storage().persistent().set(
-            &DataKey::Signer,
-            &pending.new_public_key,
-        );
+        // Replace signers: reset the map to only the recovered key at index 0.
+        storage::init_signers(&env, &pending.new_public_key);
 
         // Clear the pending recovery
         env.storage().persistent().remove(&DataKey::RecoveryPending);
@@ -604,7 +609,7 @@ mod test {
         let mut auth_data = [0u8; 37];
         auth_data[..32].copy_from_slice(&rp_id_hash);
 
-        // But stored rp_id is “veil.app” — different domain
+        // But stored rp_id is "veil.app" — different domain
         let stored_rp_id = bytes_from_str(&env, "veil.app");
 
         let auth_data_bytes = {
@@ -660,8 +665,8 @@ mod test {
         let challenge_b64 = *b"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
         let client_data_json = build_client_data_json(&env, &challenge_b64);
 
-        // clientDataJSON has origin “https://test.example” — store the same
-        let stored_origin = bytes_from_str(&env, “https://test.example”);
+        // clientDataJSON has origin "https://test.example" — store the same
+        let stored_origin = bytes_from_str(&env, "https://test.example");
 
         let result = auth::verify_origin(&client_data_json, &stored_origin);
         assert!(result.is_ok());
