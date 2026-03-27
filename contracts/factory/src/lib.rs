@@ -78,6 +78,8 @@ mod test {
     use super::*;
     use soroban_sdk::{Env, BytesN};
 
+    const MOCK_WALLET_WASM: &[u8] = include_bytes!("../test-fixtures/mock_wallet.wasm");
+
     fn make_env() -> Env {
         Env::default()
     }
@@ -93,6 +95,21 @@ mod test {
         let bytes: [u8; 65] = encoded.as_bytes().try_into().unwrap();
         BytesN::from_array(env, &bytes)
     }
+
+    fn second_valid_pub_key(env: &Env) -> BytesN<65> {
+        use p256::ecdsa::SigningKey;
+        let signing_key = SigningKey::from_bytes(&[99u8; 32].into()).unwrap();
+        let encoded = signing_key.verifying_key().to_encoded_point(false);
+        let bytes: [u8; 65] = encoded.as_bytes().try_into().unwrap();
+        BytesN::from_array(env, &bytes)
+    }
+
+    /// Upload mock wallet WASM and return its hash for use with factory.init().
+    fn install_mock_wallet(env: &Env) -> BytesN<32> {
+        env.deployer().upload_contract_wasm(MOCK_WALLET_WASM)
+    }
+
+    // ── Init tests ────────────────────────────────────────────────────────
 
     #[test]
     fn test_init_stores_wasm_hash() {
@@ -119,6 +136,59 @@ mod test {
         );
     }
 
+    // ── 1. Happy Path ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_deploy_happy_path() {
+        let env = make_env();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, Factory);
+        let client = FactoryClient::new(&env, &contract_id);
+
+        let wasm_hash = install_mock_wallet(&env);
+        client.init(&wasm_hash);
+
+        let pub_key = valid_pub_key(&env);
+        let wallet_address = client.deploy(&pub_key);
+
+        // Deployment must return a non-factory address (i.e. a new contract was created)
+        assert_ne!(wallet_address, contract_id);
+
+        // Salt must be marked as deployed in storage
+        let key_bytes = pub_key.to_array();
+        let salt_bytes = sha2_hash(&key_bytes);
+        let salt = BytesN::from_array(&env, &salt_bytes);
+        env.as_contract(&contract_id, || {
+            assert!(storage::is_deployed(&env, &salt));
+        });
+    }
+
+    // ── 2. Duplicate Prevention ───────────────────────────────────────────
+
+    #[test]
+    fn test_duplicate_deploy_fails() {
+        let env = make_env();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, Factory);
+        let client = FactoryClient::new(&env, &contract_id);
+
+        let wasm_hash = install_mock_wallet(&env);
+        client.init(&wasm_hash);
+
+        let pub_key = valid_pub_key(&env);
+
+        // First deploy succeeds
+        let _ = client.deploy(&pub_key);
+
+        // Second deploy with the same key must fail
+        assert_eq!(
+            client.try_deploy(&pub_key),
+            Err(Ok(FactoryError::AlreadyDeployed))
+        );
+    }
+
+    // ── 3. Bad Input ──────────────────────────────────────────────────────
+
     #[test]
     fn test_deploy_before_init_fails() {
         let env = make_env();
@@ -137,6 +207,7 @@ mod test {
         let contract_id = env.register_contract(None, Factory);
         let client = FactoryClient::new(&env, &contract_id);
         client.init(&dummy_wasm_hash(&env));
+        // Compressed prefix 0x03 instead of uncompressed 0x04
         let mut bad_key = [0u8; 65];
         bad_key[0] = 0x03;
         let pub_key = BytesN::from_array(&env, &bad_key);
@@ -147,37 +218,111 @@ mod test {
     }
 
     #[test]
-    fn test_duplicate_deploy_prevented() {
-        // Verifies the AlreadyDeployed guard fires before reaching the deployer.
-        // We call deploy twice; the second call must fail with AlreadyDeployed
-        // because the salt is already marked in storage after the first attempt
-        // reaches the duplicate check (even if the actual wasm deploy would fail
-        // without a real wasm hash — the guard fires first on the second call).
+    fn test_invalid_public_key_all_zeros() {
         let env = make_env();
         let contract_id = env.register_contract(None, Factory);
         let client = FactoryClient::new(&env, &contract_id);
         client.init(&dummy_wasm_hash(&env));
+        // All zeros — prefix is 0x00, not a valid point
+        let pub_key = BytesN::from_array(&env, &[0u8; 65]);
+        assert_eq!(
+            client.try_deploy(&pub_key),
+            Err(Ok(FactoryError::InvalidPublicKey))
+        );
+    }
 
-        let pub_key = valid_pub_key(&env);
+    #[test]
+    fn test_invalid_public_key_correct_prefix_but_not_on_curve() {
+        let env = make_env();
+        let contract_id = env.register_contract(None, Factory);
+        let client = FactoryClient::new(&env, &contract_id);
+        client.init(&dummy_wasm_hash(&env));
+        // Starts with 0x04 but x,y are all 1s — not a valid P-256 point
+        let mut bad_key = [1u8; 65];
+        bad_key[0] = 0x04;
+        let pub_key = BytesN::from_array(&env, &bad_key);
+        assert_eq!(
+            client.try_deploy(&pub_key),
+            Err(Ok(FactoryError::InvalidPublicKey))
+        );
+    }
 
-        // Manually mark the salt as deployed to simulate a prior successful deploy
-        let key_bytes = pub_key.to_array();
-        let salt_bytes = {
-            use sha2::{Sha256, Digest};
-            let mut h = Sha256::new();
-            h.update(key_bytes);
-            let r: [u8; 32] = h.finalize().into();
-            r
+    // ── 4. Address Determinism ────────────────────────────────────────────
+
+    #[test]
+    fn test_address_determinism() {
+        // Same public key must always produce the same salt and therefore
+        // the same wallet address. Proof: deploying twice with the same key
+        // triggers AlreadyDeployed, which only fires when SHA-256(key) → salt
+        // matches an existing record. This proves the mapping is deterministic.
+        let pub_key_bytes = {
+            use p256::ecdsa::SigningKey;
+            let signing_key = SigningKey::from_bytes(&[42u8; 32].into()).unwrap();
+            let encoded = signing_key.verifying_key().to_encoded_point(false);
+            let bytes: [u8; 65] = encoded.as_bytes().try_into().unwrap();
+            bytes
         };
-        let salt = BytesN::from_array(&env, &salt_bytes);
-        env.as_contract(&contract_id, || {
-            storage::mark_deployed(&env, &salt);
-        });
 
-        // Now deploy should return AlreadyDeployed
+        // Salt computation is deterministic
+        let salt1 = sha2_hash(&pub_key_bytes);
+        let salt2 = sha2_hash(&pub_key_bytes);
+        assert_eq!(salt1, salt2);
+
+        // Deploy in the same environment — second call proves address determinism
+        let env = make_env();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, Factory);
+        let client = FactoryClient::new(&env, &contract_id);
+        let wasm_hash = install_mock_wallet(&env);
+        client.init(&wasm_hash);
+
+        let pub_key = BytesN::from_array(&env, &pub_key_bytes);
+        let _wallet = client.deploy(&pub_key);
+
+        // Same key → same salt → same address → AlreadyDeployed
         assert_eq!(
             client.try_deploy(&pub_key),
             Err(Ok(FactoryError::AlreadyDeployed))
         );
+    }
+
+    #[test]
+    fn test_different_keys_produce_different_addresses() {
+        let env = make_env();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, Factory);
+        let client = FactoryClient::new(&env, &contract_id);
+
+        let wasm_hash = install_mock_wallet(&env);
+        client.init(&wasm_hash);
+
+        let addr1 = client.deploy(&valid_pub_key(&env));
+        let addr2 = client.deploy(&second_valid_pub_key(&env));
+        assert_ne!(addr1, addr2);
+    }
+
+    // ── 5. Wallet Initialization ──────────────────────────────────────────
+
+    #[test]
+    fn test_wallet_initialization_registers_signer() {
+        let env = make_env();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, Factory);
+        let client = FactoryClient::new(&env, &contract_id);
+
+        let wasm_hash = install_mock_wallet(&env);
+        client.init(&wasm_hash);
+
+        let pub_key = valid_pub_key(&env);
+        let wallet_address = client.deploy(&pub_key);
+
+        // The deployed wallet should have the public key registered as a signer.
+        // Call has_signer on the deployed mock wallet contract.
+        let has_signer: bool = env.invoke_contract(
+            &wallet_address,
+            &symbol_short!("is_signer"),
+            (pub_key,).into_val(&env),
+        );
+        assert!(has_signer);
     }
 }

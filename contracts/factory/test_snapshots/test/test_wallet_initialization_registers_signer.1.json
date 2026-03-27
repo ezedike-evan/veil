@@ -351,10 +351,10 @@
                 "symbol": "fn_call"
               },
               {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
+                "bytes": "c7b8e5f8537a851741f8fb11f08114fca2799f9331f7a3431ddfd15be30f5b81"
               },
               {
-                "symbol": "deploy"
+                "symbol": "is_signer"
               }
             ],
             "data": {
@@ -368,7 +368,7 @@
     {
       "event": {
         "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "contract_id": "c7b8e5f8537a851741f8fb11f08114fca2799f9331f7a3431ddfd15be30f5b81",
         "type_": "diagnostic",
         "body": {
           "v0": {
@@ -377,77 +377,11 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "deploy"
+                "symbol": "is_signer"
               }
             ],
             "data": {
-              "error": {
-                "contract": 3
-              }
-            }
-          }
-        }
-      },
-      "failed_call": true
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "error"
-              },
-              {
-                "error": {
-                  "contract": 3
-                }
-              }
-            ],
-            "data": {
-              "string": "escalating Ok(ScErrorType::Contract) frame-exit to Err"
-            }
-          }
-        }
-      },
-      "failed_call": true
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": null,
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "error"
-              },
-              {
-                "error": {
-                  "contract": 3
-                }
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "string": "contract try_call failed"
-                },
-                {
-                  "symbol": "deploy"
-                },
-                {
-                  "vec": [
-                    {
-                      "bytes": "040c901d423c831ca85e27c73c263ba132721bb9d7a84c4f0380b2a6756fd601331c8870234dec878504c174144fa4b14b66a651691606d8173e55bd37e381569e"
-                    }
-                  ]
-                }
-              ]
+              "bool": true
             }
           }
         }
