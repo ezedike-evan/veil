@@ -240,7 +240,7 @@ async function waitForTransaction(
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
-    const { factoryAddress, rpcUrl, networkPassphrase } = config;
+    const { factoryAddress, rpcUrl, networkPassphrase, rpId, origin } = config;
 
     const [address, setAddress] = useState<string | null>(null);
     const [isDeployed, setIsDeployed] = useState(false);
@@ -368,7 +368,12 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
                 networkPassphrase,
             })
                 .addOperation(
-                    factory.call('deploy', nativeToScVal(pubKeyBytes, { type: 'bytes' }))
+                    factory.call(
+                        'deploy',
+                        nativeToScVal(pubKeyBytes, { type: 'bytes' }),
+                        nativeToScVal(Buffer.from(rpId ?? window.location.hostname), { type: 'bytes' }),
+                        nativeToScVal(Buffer.from(origin ?? window.location.origin), { type: 'bytes' }),
+                    )
                 )
                 .setTimeout(30)
                 .build();

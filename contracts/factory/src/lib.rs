@@ -30,7 +30,7 @@ impl Factory {
 
     /// Deploy a new invisible_wallet for the given P-256 public key.
     /// Returns the Address of the newly deployed wallet.
-    pub fn deploy(env: Env, public_key: BytesN<65>) -> Result<Address, FactoryError> {
+    pub fn deploy(env: Env, public_key: BytesN<65>, rp_id: soroban_sdk::Bytes, origin: soroban_sdk::Bytes) -> Result<Address, FactoryError> {
         // Step 1: must be initialized
         let wasm_hash = storage::get_wasm_hash(&env)
             .ok_or(FactoryError::NotInitialized)?;
@@ -54,7 +54,7 @@ impl Factory {
             .with_address(env.current_contract_address(), salt.clone())
             .deploy(wasm_hash);
 
-        let init_args: Vec<soroban_sdk::Val> = (public_key.clone(),).into_val(&env);
+        let init_args: Vec<soroban_sdk::Val> = (public_key.clone(), rp_id, origin).into_val(&env);
         env.invoke_contract::<soroban_sdk::Val>(&wallet_address, &symbol_short!("init"), init_args);
 
         // Step 6: mark as deployed
