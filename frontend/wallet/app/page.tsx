@@ -39,6 +39,7 @@ export default function OnboardingPage() {
   async function handleCreate() {
     setError(null)
     setStep('registering')
+    let success = false
     try {
       const result = await wallet.register()
       if (!result) throw new Error('Registration returned no result')
@@ -63,14 +64,17 @@ export default function OnboardingPage() {
 
       setAddress(deployed.walletAddress)
       setStep('done')
-
-      // Brief pause so the success state is visible, then go to dashboard
-      await new Promise(r => setTimeout(r, 1200))
-      router.push('/dashboard')
+      success = true
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
       setStep('landing')
+    }
+
+    // Navigate outside try/catch so a routing error can't reset the page to 'landing'
+    if (success) {
+      await new Promise(r => setTimeout(r, 1200))
+      router.push('/dashboard')
     }
   }
 
