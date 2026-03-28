@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 
 // ── Inactivity lock constant ──────────────────────────────────────────────────
@@ -55,11 +55,61 @@ export default function DashboardPage() {
   // Activate inactivity lock for the entire dashboard session
   useInactivityLock()
 
-  // Read the wallet address stored by register() / login()
-  const walletAddress =
-    typeof window !== 'undefined'
-      ? sessionStorage.getItem('invisible_wallet_address')
-      : null
+  const [walletAddress, setWalletAddress] = useState<string | null>(null)
+  const [balance, setBalance] = useState<string | null>(null)
+  const [isFunding, setIsFunding] = useState(false)
+  const [fundingError, setFundingError] = useState<string | null>(null)
+
+  const isTestnet = process.env.NEXT_PUBLIC_NETWORK === 'testnet'
+
+  // Load wallet address on mount
+  useEffect(() => {
+    const stored = sessionStorage.getItem('invisible_wallet_address')
+    setWalletAddress(stored)
+  }, [])
+
+  const fetchBalance = useCallback(async () => {
+    if (!walletAddress) return
+
+    const horizonUrl = isTestnet
+      ? 'https://horizon-testnet.stellar.org'
+      : 'https://horizon.stellar.org'
+
+    try {
+      const res = await fetch(`${horizonUrl}/accounts/${walletAddress}`)
+      if (res.status === 404) {
+        setBalance('0')
+        return
+      }
+      if (res.ok) {
+        const data = await res.json()
+        const native = data.balances.find((b: any) => b.asset_type === 'native')
+        setBalance(native?.balance || '0')
+      }
+    } catch (err) {
+      console.error('Balance fetch failed', err)
+    }
+  }, [walletAddress, isTestnet])
+
+  useEffect(() => {
+    fetchBalance()
+  }, [fetchBalance])
+
+  const handleFund = async () => {
+    if (!walletAddress) return
+    setIsFunding(true)
+    setFundingError(null)
+    try {
+      const res = await fetch(`https://friendbot.stellar.org/?addr=${walletAddress}`)
+      if (!res.ok) throw new Error('Friendbot failed')
+      await new Promise((r) => setTimeout(r, 2000)) // Wait for ledger close ingestion
+      await fetchBalance()
+    } catch (err) {
+      setFundingError('Funding failed. Please try again.')
+    } finally {
+      setIsFunding(false)
+    }
+  }
 
   return (
     <div className="wallet-shell">
@@ -89,6 +139,43 @@ export default function DashboardPage() {
           <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.5)' }}>
             Your wallet locks automatically after 5 minutes of inactivity.
           </p>
+        </div>
+
+        {/* ── Balance Display ── */}
+        <div style={{ marginBottom: '3rem' }}>
+          <p style={{ fontSize: '0.75rem', color: 'var(--warm-grey)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
+            Available Balance
+          </p>
+          <div style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '2.5rem', color: 'var(--off-white)' }}>
+            {balance !== null 
+              ? `${parseFloat(balance).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 7 })} XLM` 
+              : '—'
+            }
+          </div>
+
+          {/* Faucet button for zero-balance testnet wallets */}
+          {isTestnet && balance === '0' && (
+            <div style={{ marginTop: '1.25rem' }}>
+              <button
+                className="btn-ghost"
+                onClick={handleFund}
+                disabled={isFunding}
+                style={{ width: 'auto', paddingLeft: '1.5rem', paddingRight: '1.5rem', minHeight: '3rem' }}
+              >
+                {isFunding ? (
+                  <div className="spinner spinner-light" style={{ width: '1.25rem', height: '1.25rem' }} />
+                ) : (
+                  'Fund with testnet XLM'
+                )}
+              </button>
+
+              {fundingError && (
+                <p style={{ color: '#ff4d4d', fontSize: '0.75rem', marginTop: '0.75rem' }}>
+                  {fundingError}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Placeholder — replace with real wallet UI */}
