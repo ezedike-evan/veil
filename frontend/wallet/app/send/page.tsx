@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Keypair, Networks, TransactionBuilder, BASE_FEE, Operation, Asset, Memo } from 'stellar-sdk'
 import { Server } from 'stellar-sdk/lib/horizon'
 import { VeilLogo } from '@/components/VeilLogo'
+import { ContactPicker } from '@/components/ContactPicker'
 
 type Step = 'form' | 'confirm' | 'signing' | 'done' | 'error'
 
@@ -16,6 +17,7 @@ export default function SendPage() {
   const [memo, setMemo] = useState('')
   const [txHash, setTxHash] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [showPicker, setShowPicker] = useState(false)
 
   useEffect(() => {
     const addr = sessionStorage.getItem('veil_address')
@@ -92,9 +94,17 @@ export default function SendPage() {
         {step === 'form' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div>
-              <label style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', display: 'block', marginBottom: '0.5rem', fontFamily: 'Anton, Impact, sans-serif', letterSpacing: '0.06em' }}>
-                RECIPIENT ADDRESS
-              </label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <label style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', fontFamily: 'Anton, Impact, sans-serif', letterSpacing: '0.06em' }}>
+                  RECIPIENT ADDRESS
+                </label>
+                <button
+                  onClick={() => setShowPicker(true)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gold)', fontSize: '0.75rem' }}
+                >
+                  Choose from contacts
+                </button>
+              </div>
               <input
                 className="input-field mono"
                 type="text"
@@ -222,6 +232,16 @@ export default function SendPage() {
           </div>
         )}
       </main>
+
+      {showPicker && (
+        <ContactPicker
+          onSelect={(contact) => {
+            setRecipient(contact.address)
+            setShowPicker(false)
+          }}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
     </div>
   )
 }

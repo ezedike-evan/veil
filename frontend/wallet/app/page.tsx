@@ -10,10 +10,7 @@ import { useInvisibleWallet } from '@veil/sdk'
 const CONFIG = {
   rpcUrl: 'https://soroban-testnet.stellar.org',
   networkPassphrase: 'Test SDF Network ; September 2015',
-  factoryContractId: process.env.NEXT_PUBLIC_FACTORY_CONTRACT_ID ?? '',
-  contractId: '',
-  rpId: typeof window !== 'undefined' ? window.location.hostname : 'localhost',
-  origin: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000',
+  factoryAddress: process.env.NEXT_PUBLIC_FACTORY_CONTRACT_ID ?? '',
 }
 
 type Step = 'landing' | 'registering' | 'deploying' | 'done'

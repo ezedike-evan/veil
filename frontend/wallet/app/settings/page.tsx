@@ -9,9 +9,7 @@ import { useInvisibleWallet } from '@veil/sdk'
 const CONFIG = {
   rpcUrl: 'https://soroban-testnet.stellar.org',
   networkPassphrase: 'Test SDF Network ; September 2015',
-  factoryContractId: process.env.NEXT_PUBLIC_FACTORY_CONTRACT_ID ?? '',
-  rpId: typeof window !== 'undefined' ? window.location.hostname : 'localhost',
-  origin: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000',
+  factoryAddress: process.env.NEXT_PUBLIC_FACTORY_CONTRACT_ID ?? '',
 }
 
 type Section = 'overview' | 'add-signer' | 'guardian'
@@ -26,10 +24,7 @@ export default function SettingsPage() {
   // Guardian form
   const [guardianAddress, setGuardianAddress] = useState('')
 
-  const wallet = useInvisibleWallet({
-    ...CONFIG,
-    contractId: address ?? '',
-  })
+  const wallet = useInvisibleWallet(CONFIG)
 
   useEffect(() => {
     const addr = sessionStorage.getItem('veil_address')
@@ -150,6 +145,25 @@ export default function SettingsPage() {
                     <p style={{ fontWeight: 500, fontSize: '0.9375rem' }}>Guardian recovery</p>
                     <p style={{ fontSize: '0.8125rem', color: 'rgba(246,247,248,0.4)', marginTop: '0.25rem' }}>
                       Set a trusted account to recover access if you lose your device
+                    </p>
+                  </div>
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+                    <path d="M6 3l5 5-5 5" stroke="rgba(246,247,248,0.3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+              </button>
+
+              {/* Address Book card */}
+              <button
+                className="card"
+                onClick={() => router.push('/contacts')}
+                style={{ textAlign: 'left', cursor: 'pointer', width: '100%', border: '1px solid var(--border-dim)', background: 'var(--surface)' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <p style={{ fontWeight: 500, fontSize: '0.9375rem' }}>Address Book</p>
+                    <p style={{ fontSize: '0.8125rem', color: 'rgba(246,247,248,0.4)', marginTop: '0.25rem' }}>
+                      Save and manage frequently used Stellar addresses
                     </p>
                   </div>
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>

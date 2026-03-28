@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { LockKeyhole, Fingerprint, AlertCircle } from 'lucide-react'
-import { useInvisibleWallet } from 'invisible-wallet-sdk'
+import { useInvisibleWallet } from '@veil/sdk'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const FACTORY_ADDRESS    = process.env.NEXT_PUBLIC_FACTORY_ADDRESS    ?? ''

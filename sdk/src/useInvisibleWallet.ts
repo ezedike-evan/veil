@@ -53,6 +53,8 @@ export type WebAuthnSignature = {
 export type RegisterResult = {
     /** The deterministically computed contract address of the new wallet ("C..."). */
     walletAddress: string;
+    /** The uncompressed P-256 public key (65 bytes). */
+    publicKeyBytes?: Uint8Array;
 };
 
 /** Result returned by a successful deploy() call. */
@@ -113,7 +115,7 @@ type InvisibleWallet = {
     isPending: boolean;
     error: string | null;
     /** Create a new passkey credential and compute the deterministic wallet address. */
-    register: (username: string) => Promise<RegisterResult>;
+    register: (username?: string) => Promise<RegisterResult>;
     /**
      * Deploy the user's wallet contract on-chain via the factory.
      *
@@ -139,7 +141,7 @@ type InvisibleWallet = {
      * Restore an existing wallet session from localStorage.
      * Verifies that the wallet contract actually exists on-chain before setting the address.
      */
-    login: () => Promise<void>;
+    login: () => Promise<RegisterResult | null>;
     /**
      * Read the wallet contract's current nonce without submitting a transaction.
      * Uses `server.simulateTransaction` to invoke `get_nonce` in read-only mode.
@@ -234,7 +236,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
 
     // ── register ──────────────────────────────────────────────────────────────
 
-    const register = async (username: string): Promise<RegisterResult> => {
+    const register = async (username: string = 'User'): Promise<RegisterResult> => {
         setIsPending(true);
         setError(null);
         try {
@@ -270,8 +272,9 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
             localStorage.setItem('invisible_wallet_key_id',     credential.id);
             localStorage.setItem('invisible_wallet_public_key', publicKeyHex);
             setAddress(walletAddress);
+            setIsDeployed(false); // New registration, not yet deployed
 
-            return { walletAddress };
+            return { walletAddress, publicKeyBytes };
 
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
@@ -395,7 +398,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
             const stored = localStorage.getItem('invisible_wallet_address');
             if (!stored) {
                 setError('No wallet found. Please register first.');
-                return;
+                return null;
             }
 
             const server = new SorobanRpc.Server(rpcUrl);
@@ -410,18 +413,21 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
                 // Reached here → entry found → already deployed.
                 setAddress(stored);
                 setIsDeployed(true);
+                return { walletAddress: stored };
             } catch (e: unknown) {
                 const msg = e instanceof Error ? e.message : String(e);
                 if (msg.toLowerCase().includes('not found')) {
                     setError('Wallet not yet deployed. Call deploy() to create it on-chain.');
                     setAddress(null);
                     setIsDeployed(false);
+                    return null;
                 } else {
                     throw e; // Real network error
                 }
             }
         } catch (err: unknown) {
             setError(err instanceof Error ? err.message : String(err));
+            return null;
         } finally {
             setIsPending(false);
         }
