@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import {
   Keypair, Networks, TransactionBuilder, BASE_FEE, Asset,
   Contract, rpc as SorobanRpc, nativeToScVal, xdr, Horizon,
-} from 'stellar-sdk'
+} from '@stellar/stellar-sdk'
 const Server = Horizon.Server
 import { VeilLogo } from '@/components/VeilLogo'
 import { ContactPicker } from '@/components/ContactPicker'

@@ -1,4 +1,4 @@
-import { StrKey, xdr, hash as stellarHash } from 'stellar-sdk';
+import { StrKey, xdr, hash as stellarHash } from '@stellar/stellar-sdk';
 
 // ── Buffer helpers ────────────────────────────────────────────────────────────
 
@@ -218,33 +218,39 @@ export function computeWalletAddress(
     // Step 1: Hash the 65-byte public key → 32-byte salt.
     //   The factory contract calls env.crypto().sha256(&public_key_bytes) for the same reason:
     //   Soroban's deployer salt must be exactly 32 bytes (Uint256).
-    const salt = stellarHash(Buffer.from(publicKeyBytes));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const salt = (stellarHash as any)(Buffer.from(publicKeyBytes)) as Buffer;
 
     // Step 2: Hash the network passphrase → 32-byte networkId.
     //   Every Stellar network has a unique passphrase, so contract IDs don't collide
     //   between testnet and mainnet even with identical inputs.
-    const networkId = stellarHash(Buffer.from(networkPassphrase));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const networkId = (stellarHash as any)(Buffer.from(networkPassphrase)) as Buffer;
 
     // Step 3: Decode the factory's strkey → raw 32-byte contract hash.
-    const factoryHash = StrKey.decodeContract(factoryId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const factoryHash = StrKey.decodeContract(factoryId) as any;
 
     // Step 4: Build the XDR preimage that Soroban hashes to derive contract addresses.
     //   This is the canonical HashIdPreimage::ContractId structure from the Stellar XDR spec.
     //   It encodes: "this contract was deployed by <factory> with <salt> on <network>".
     const preimage = xdr.HashIdPreimage.envelopeTypeContractId(
         new xdr.HashIdPreimageContractId({
-            networkId,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            networkId: networkId as any,
             contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
                 new xdr.ContractIdPreimageFromAddress({
                     address: xdr.ScAddress.scAddressTypeContract(factoryHash),
-                    salt,
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    salt: salt as any,
                 })
             ),
         })
     );
 
     // Step 5: SHA-256 the serialised XDR → 32-byte contract ID.
-    const contractId = stellarHash(preimage.toXDR());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const contractId = (stellarHash as any)(preimage.toXDR()) as Buffer;
 
     // Step 6: Encode as a Stellar contract strkey ("C...").
     return StrKey.encodeContract(contractId);

@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 import { useInvisibleWallet } from '@veil/sdk'
-import { Keypair } from 'stellar-sdk'
+import { Keypair } from '@stellar/stellar-sdk'
 
 const TESTNET_CONFIG = {
   rpcUrl: 'https://soroban-testnet.stellar.org',

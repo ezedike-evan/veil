@@ -12,7 +12,7 @@ import {
     nativeToScVal,
     scValToNative,
     Networks,
-} from 'stellar-sdk';
+} from '@stellar/stellar-sdk';
 
 const HorizonServer = Horizon.Server;
 import {
@@ -157,7 +157,7 @@ type InvisibleWallet = {
      * Restore an existing wallet session from localStorage.
      * Verifies that the wallet contract actually exists on-chain before setting the address.
      */
-    login: () => Promise<RegisterResult | null>;
+    login: () => Promise<{ walletAddress: string } | null>;
     /**
      * Read the wallet contract's current nonce without submitting a transaction.
      * Uses `server.simulateTransaction` to invoke `get_nonce` in read-only mode.

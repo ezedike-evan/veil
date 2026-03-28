@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { StrKey } from 'stellar-sdk'
+import { StrKey } from '@stellar/stellar-sdk'
 
 export interface Contact {
   id: string
