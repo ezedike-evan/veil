@@ -45,6 +45,7 @@ export default function OnboardingPage() {
 
       setStep('deploying')
       const signerKeypair = Keypair.random()
+      const signerSecret  = signerKeypair.secret()
 
       // Fund the fee-payer keypair via Friendbot before deploying on testnet
       const friendbotRes = await fetch(
@@ -52,11 +53,13 @@ export default function OnboardingPage() {
       )
       if (!friendbotRes.ok) throw new Error('Friendbot funding failed — try again')
 
-      const deployed = await wallet.deploy(signerKeypair)
+      // Pass secret string so the SDK uses its own Keypair instance internally,
+      // avoiding XDR type mismatches between two stellar-sdk copies.
+      const deployed = await wallet.deploy(signerSecret)
 
       // Persist minimal session to sessionStorage for the dashboard
       sessionStorage.setItem('invisible_wallet_address', deployed.walletAddress)
-      sessionStorage.setItem('veil_signer_secret', signerKeypair.secret())
+      sessionStorage.setItem('veil_signer_secret', signerSecret)
 
       setAddress(deployed.walletAddress)
       setStep('done')

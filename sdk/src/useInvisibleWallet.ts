@@ -308,9 +308,14 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
     // ── deploy ────────────────────────────────────────────────────────────────
 
     const deploy = useCallback(async (
-        signerKeypair: Keypair,
+        signerSecret: string | Keypair,
         publicKeyBytes?: Uint8Array
     ): Promise<DeployResult> => {
+        // Always reconstruct Keypair from the SDK's own stellar-sdk instance to avoid
+        // XDR type mismatches when the caller imports stellar-sdk from a different copy.
+        const signerKeypair = typeof signerSecret === 'string'
+            ? Keypair.fromSecret(signerSecret)
+            : Keypair.fromSecret(signerSecret.secret());
         setIsPending(true);
         setError(null);
         try {
