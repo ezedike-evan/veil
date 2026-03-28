@@ -190,8 +190,8 @@ export default function DashboardPage() {
             }
           </div>
 
-          {/* Faucet button for zero-balance testnet wallets */}
-          {isTestnet && xlmBalance === '0' && (
+          {/* Faucet button for unfunded or zero-balance testnet wallets */}
+          {isTestnet && !loading && (xlmBalance === null || xlmBalance === '0') && (
             <div style={{ marginTop: '1.25rem' }}>
               <button
                 className="btn-ghost"
