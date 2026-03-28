@@ -2,64 +2,197 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Keypair, Networks, TransactionBuilder, BASE_FEE, Operation, Asset, Memo } from 'stellar-sdk'
+import {
+  Keypair, Networks, TransactionBuilder, BASE_FEE, Asset,
+  Contract, SorobanRpc, nativeToScVal, xdr, scValToNative,
+} from 'stellar-sdk'
 import { Server } from 'stellar-sdk/lib/horizon'
 import { VeilLogo } from '@/components/VeilLogo'
+import { QrScanner } from '@/components/QrScanner'
+import { hexToUint8Array, derToRawSignature } from '@veil/utils'
 
 type Step = 'form' | 'confirm' | 'signing' | 'done' | 'error'
 
+interface WalletAsset {
+  code: string
+  issuer: string | null
+  contractId: string | null
+}
+
 export default function SendPage() {
   const router = useRouter()
-  const [step, setStep] = useState<Step>('form')
-  const [recipient, setRecipient] = useState('')
-  const [amount, setAmount] = useState('')
-  const [memo, setMemo] = useState('')
-  const [txHash, setTxHash] = useState<string | null>(null)
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [step, setStep]             = useState<Step>('form')
+  const [recipient, setRecipient]   = useState('')
+  const [amount, setAmount]         = useState('')
+  const [memo, setMemo]             = useState('')
+  const [txHash, setTxHash]         = useState<string | null>(null)
+  const [errorMsg, setErrorMsg]     = useState<string | null>(null)
+  const [showScanner, setShowScanner] = useState(false)
+
+  const [assets, setAssets]             = useState<WalletAsset[]>([])
+  const [selectedAsset, setSelectedAsset] = useState<WalletAsset | null>(null)
 
   useEffect(() => {
     const addr = sessionStorage.getItem('veil_address')
-    if (!addr) router.replace('/')
+    if (!addr) { router.replace('/'); return }
+
+    // Fetch available balances to populate asset selector
+    const server = new Server('https://horizon-testnet.stellar.org')
+    server.loadAccount(addr).then(account => {
+      const list: WalletAsset[] = account.balances.map(b => {
+        if (b.asset_type === 'native') {
+          return { code: 'XLM', issuer: null, contractId: Asset.native().contractId(Networks.TESTNET) }
+        }
+        const issued = b as { asset_code: string; asset_issuer: string }
+        const asset  = new Asset(issued.asset_code, issued.asset_issuer)
+        return { code: issued.asset_code, issuer: issued.asset_issuer, contractId: asset.contractId(Networks.TESTNET) }
+      })
+      setAssets(list)
+      if (list.length > 0) setSelectedAsset(list[0])
+    }).catch(() => {
+      // Account not yet funded — default to XLM
+      const xlm: WalletAsset = { code: 'XLM', issuer: null, contractId: Asset.native().contractId(Networks.TESTNET) }
+      setAssets([xlm])
+      setSelectedAsset(xlm)
+    })
   }, [router])
 
   function validateForm(): boolean {
     if (!recipient.startsWith('G') || recipient.length !== 56) return false
-    if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) return false
+    if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0)  return false
+    if (!selectedAsset) return false
     return true
   }
 
   async function handleSend() {
+    if (!selectedAsset?.contractId) {
+      setErrorMsg('Asset contract ID unavailable')
+      setStep('error')
+      return
+    }
     setStep('signing')
     setErrorMsg(null)
     try {
-      const sourceAddress = sessionStorage.getItem('veil_address')!
-      const signerSecret = sessionStorage.getItem('veil_signer_secret')!
-      const signerKeypair = Keypair.fromSecret(signerSecret)
+      const walletAddress = sessionStorage.getItem('veil_address')!
+      const signerSecret  = sessionStorage.getItem('veil_signer_secret')!
+      const feePayerKp    = Keypair.fromSecret(signerSecret)
 
-      const server = new Server('https://horizon-testnet.stellar.org')
-      const account = await server.loadAccount(sourceAddress)
+      const rpcUrl = 'https://soroban-testnet.stellar.org'
+      const server = new SorobanRpc.Server(rpcUrl)
 
-      const txBuilder = new TransactionBuilder(account, {
+      // ── Build Soroban transaction via the asset's SAC ──────────────────────
+      // The fee payer submits the transaction; the wallet contract authorises
+      // the transfer by having __check_auth verify the WebAuthn signature.
+      const feePayerAccount = await server.getAccount(feePayerKp.publicKey())
+      const sacContract     = new Contract(selectedAsset.contractId)
+
+      // SAC transfer expects i128 in stroop-equivalent units (7 decimal places)
+      const amountStroops = BigInt(Math.round(parseFloat(amount) * 10_000_000))
+
+      const tx = new TransactionBuilder(feePayerAccount, {
         fee: BASE_FEE,
         networkPassphrase: Networks.TESTNET,
       })
         .addOperation(
-          Operation.payment({
-            destination: recipient,
-            asset: Asset.native(),
-            amount: amount,
-          })
+          sacContract.call(
+            'transfer',
+            nativeToScVal(walletAddress, { type: 'address' }),
+            nativeToScVal(recipient,     { type: 'address' }),
+            nativeToScVal(amountStroops, { type: 'i128' }),
+          )
         )
         .setTimeout(30)
+        .build()
 
-      if (memo) txBuilder.addMemo(Memo.text(memo))
+      // ── Simulate to discover auth entries ──────────────────────────────────
+      const sim = await server.simulateTransaction(tx)
+      if (SorobanRpc.Api.isSimulationError(sim)) {
+        throw new Error(`Simulation failed: ${sim.error}`)
+      }
+      const successSim  = sim as SorobanRpc.Api.SimulateTransactionSuccessResponse
+      const authEntries = successSim.result?.auth ?? []
 
-      const tx = txBuilder.build()
-      tx.sign(signerKeypair)
+      // ── Sign each auth entry that requires the wallet contract ─────────────
+      // The SAC's transfer() calls wallet.require_auth(), which triggers
+      // InvisibleWallet.__check_auth with the WebAuthn signature as credentials.
+      const keyId        = localStorage.getItem('invisible_wallet_key_id')
+      const publicKeyHex = localStorage.getItem('invisible_wallet_public_key')
+      if (!keyId || !publicKeyHex) throw new Error('No passkey found. Register the wallet first.')
 
-      const result = await server.submitTransaction(tx)
-      setTxHash(result.hash)
-      setStep('done')
+      const credIdBin = atob(keyId.replace(/-/g, '+').replace(/_/g, '/'))
+      const credId    = Uint8Array.from(credIdBin, c => c.charCodeAt(0))
+
+      for (const entry of authEntries) {
+        const cred = entry.credentials()
+        if (cred.switch().value !== xdr.SorobanCredentialsType.sorobanCredentialsAddress().value) {
+          continue
+        }
+
+        // The signature payload is SHA-256 of the serialised invocation XDR
+        const invocationXdr = entry.rootInvocation().toXDR()
+        const payloadHash   = new Uint8Array(
+          await crypto.subtle.digest('SHA-256', new Uint8Array(invocationXdr))
+        )
+
+        // Prompt the user's passkey (WebAuthn assertion)
+        const assertion = await navigator.credentials.get({
+          publicKey: {
+            challenge:          payloadHash.buffer.slice(payloadHash.byteOffset, payloadHash.byteOffset + 32) as ArrayBuffer,
+            allowCredentials:   [{ id: credId, type: 'public-key' }],
+            userVerification:   'required',
+          },
+        }) as PublicKeyCredential | null
+        if (!assertion) throw new Error('Passkey signing was cancelled')
+
+        const response  = assertion.response as AuthenticatorAssertionResponse
+        const rawSig    = derToRawSignature(response.signature)
+        const pubKeyBytes = hexToUint8Array(publicKeyHex)
+
+        // Pack the four WebAuthn components into the Vec<Val> the contract expects
+        const sigVec = xdr.ScVal.scvVec([
+          nativeToScVal(pubKeyBytes,                              { type: 'bytes' }),
+          nativeToScVal(new Uint8Array(response.authenticatorData), { type: 'bytes' }),
+          nativeToScVal(new Uint8Array(response.clientDataJSON),  { type: 'bytes' }),
+          nativeToScVal(rawSig,                                   { type: 'bytes' }),
+        ])
+
+        const addrCred = cred.address()
+        entry.credentials(
+          xdr.SorobanCredentials.sorobanCredentialsAddress(
+            new xdr.SorobanAddressCredentials({
+              address:                    addrCred.address(),
+              nonce:                      addrCred.nonce(),
+              signatureExpirationLedger:  addrCred.signatureExpirationLedger(),
+              signature:                  sigVec,
+            })
+          )
+        )
+      }
+
+      // ── Assemble, sign fee-payer, submit ───────────────────────────────────
+      const assembled = SorobanRpc.assembleTransaction(tx, sim).build()
+      assembled.sign(feePayerKp)
+
+      const sendResult = await server.sendTransaction(assembled)
+      if (sendResult.status === 'ERROR') {
+        throw new Error(`Transaction rejected: ${sendResult.errorResult?.toXDR('base64') ?? 'unknown'}`)
+      }
+
+      // Poll until confirmed
+      for (let i = 0; i < 30; i++) {
+        const result = await server.getTransaction(sendResult.hash)
+        if (result.status !== SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+          if (result.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+            throw new Error(`Transaction failed: ${result.status}`)
+          }
+          setTxHash(sendResult.hash)
+          setStep('done')
+          return
+        }
+        await new Promise(r => setTimeout(r, 1_000))
+      }
+      throw new Error('Confirmation timeout — check Stellar Explorer for status')
+
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setErrorMsg(msg)
@@ -86,29 +219,79 @@ export default function SendPage() {
 
       <main className="wallet-main">
         <h2 style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '1.75rem', marginBottom: '1.75rem' }}>
-          Send XLM
+          Send
         </h2>
 
         {step === 'form' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+            {/* Asset selector */}
+            {assets.length > 1 && (
+              <div>
+                <label style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', display: 'block', marginBottom: '0.5rem', fontFamily: 'Anton, Impact, sans-serif', letterSpacing: '0.06em' }}>
+                  ASSET
+                </label>
+                <select
+                  value={selectedAsset?.code ?? ''}
+                  onChange={e => setSelectedAsset(assets.find(a => a.code === e.target.value) ?? null)}
+                  className="input-field"
+                  style={{ fontFamily: 'Inconsolata, monospace' }}
+                >
+                  {assets.map(a => (
+                    <option key={`${a.code}-${a.issuer ?? 'native'}`} value={a.code}>
+                      {a.code}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Recipient address + QR scan button */}
             <div>
               <label style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', display: 'block', marginBottom: '0.5rem', fontFamily: 'Anton, Impact, sans-serif', letterSpacing: '0.06em' }}>
                 RECIPIENT ADDRESS
               </label>
-              <input
-                className="input-field mono"
-                type="text"
-                placeholder="G..."
-                value={recipient}
-                onChange={e => setRecipient(e.target.value.trim())}
-                autoComplete="off"
-                spellCheck={false}
-              />
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'stretch' }}>
+                <input
+                  className="input-field mono"
+                  type="text"
+                  placeholder="G..."
+                  value={recipient}
+                  onChange={e => setRecipient(e.target.value.trim())}
+                  autoComplete="off"
+                  spellCheck={false}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowScanner(true)}
+                  aria-label="Scan QR code"
+                  title="Scan recipient address from QR code"
+                  style={{
+                    background: 'var(--surface-md)', border: '1px solid var(--border-dim)',
+                    borderRadius: '0.5rem', cursor: 'pointer',
+                    color: 'var(--off-white)', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center',
+                    width: 44, flexShrink: 0,
+                  }}
+                >
+                  {/* QR code icon */}
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                    <rect x="2" y="2" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+                    <rect x="12" y="2" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+                    <rect x="2" y="12" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+                    <rect x="4" y="4" width="2" height="2" fill="currentColor"/>
+                    <rect x="14" y="4" width="2" height="2" fill="currentColor"/>
+                    <rect x="4" y="14" width="2" height="2" fill="currentColor"/>
+                    <path d="M12 12h2v2h-2zM14 14h2v2h-2zM16 12h2v2h-2zM12 16h4v2h-4z" fill="currentColor"/>
+                  </svg>
+                </button>
+              </div>
             </div>
 
             <div>
               <label style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', display: 'block', marginBottom: '0.5rem', fontFamily: 'Anton, Impact, sans-serif', letterSpacing: '0.06em' }}>
-                AMOUNT (XLM)
+                AMOUNT{selectedAsset ? ` (${selectedAsset.code})` : ''}
               </label>
               <input
                 className="input-field"
@@ -152,16 +335,16 @@ export default function SendPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div className="card">
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <Row label="To" value={`${recipient.slice(0, 8)}...${recipient.slice(-8)}`} mono />
-                <Row label="Amount" value={`${amount} XLM`} />
+                <Row label="To"      value={`${recipient.slice(0, 8)}...${recipient.slice(-8)}`} mono />
+                <Row label="Amount"  value={`${amount} ${selectedAsset?.code ?? 'XLM'}`} />
                 {memo && <Row label="Memo" value={memo} />}
                 <Row label="Network" value="Stellar Testnet" />
+                <Row label="Auth"    value="Passkey (WebAuthn)" />
               </div>
             </div>
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <button className="btn-gold" onClick={handleSend}>
-                Confirm send
+                Confirm &amp; sign
               </button>
               <button className="btn-ghost" onClick={() => setStep('form')}>
                 Edit
@@ -175,9 +358,9 @@ export default function SendPage() {
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1rem' }}>
               <div className="spinner spinner-light" />
             </div>
-            <p style={{ fontWeight: 500 }}>Broadcasting transaction...</p>
+            <p style={{ fontWeight: 500 }}>Waiting for passkey…</p>
             <p style={{ fontSize: '0.8125rem', color: 'rgba(246,247,248,0.4)', marginTop: '0.5rem' }}>
-              Submitting to Stellar Testnet
+              Approve the prompt to authorise the transfer
             </p>
           </div>
         )}
@@ -185,8 +368,8 @@ export default function SendPage() {
         {step === 'done' && (
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', textAlign: 'center' }}>
             <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style={{ margin: '0 auto' }}>
-              <circle cx="20" cy="20" r="19" stroke="var(--teal)" strokeWidth="1.5" />
-              <path d="M13 20.5l5 5 9-9" stroke="var(--teal)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="20" cy="20" r="19" stroke="var(--teal)" strokeWidth="1.5"/>
+              <path d="M13 20.5l5 5 9-9" stroke="var(--teal)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
             <div>
               <p style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '1.25rem' }}>
@@ -207,8 +390,8 @@ export default function SendPage() {
         {step === 'error' && (
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', textAlign: 'center' }}>
             <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style={{ margin: '0 auto' }}>
-              <circle cx="20" cy="20" r="19" stroke="var(--teal)" strokeWidth="1.5" opacity="0.5" />
-              <path d="M14 14l12 12M26 14l-12 12" stroke="var(--teal)" strokeWidth="2" strokeLinecap="round" />
+              <circle cx="20" cy="20" r="19" stroke="var(--teal)" strokeWidth="1.5" opacity="0.5"/>
+              <path d="M14 14l12 12M26 14l-12 12" stroke="var(--teal)" strokeWidth="2" strokeLinecap="round"/>
             </svg>
             <div>
               <p style={{ fontWeight: 500 }}>Transaction failed</p>
@@ -222,6 +405,13 @@ export default function SendPage() {
           </div>
         )}
       </main>
+
+      {showScanner && (
+        <QrScanner
+          onScan={addr => { setRecipient(addr); setShowScanner(false) }}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
     </div>
   )
 }
