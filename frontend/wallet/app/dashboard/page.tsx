@@ -2,102 +2,131 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { Server } from 'stellar-sdk/lib/horizon'
+import { TxDetailSheet, type TxRecord } from '@/components/TxDetailSheet'
 
-// ── Inactivity lock constant ──────────────────────────────────────────────────
-// After this many milliseconds of no user interaction the wallet is locked and
-// sessionStorage is cleared. Set to 5 minutes per the security spec.
+// ── Inactivity lock ───────────────────────────────────────────────────────────
 const LOCK_TIMEOUT_MS = 5 * 60 * 1000
-
-// Events that count as user activity and reset the inactivity timer
 const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'touchstart', 'click', 'scroll'] as const
 
-// ── useInactivityLock ─────────────────────────────────────────────────────────
 function useInactivityLock() {
   const router          = useRouter()
   const timerRef        = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastActivityRef = useRef<number>(Date.now())
 
   const lock = useCallback(() => {
-    // Clear the session — user must re-authenticate via passkey
     sessionStorage.clear()
     router.replace('/lock')
   }, [router])
 
   const resetTimer = useCallback(() => {
     lastActivityRef.current = Date.now()
-
     if (timerRef.current) clearTimeout(timerRef.current)
-
     timerRef.current = setTimeout(lock, LOCK_TIMEOUT_MS)
   }, [lock])
 
   useEffect(() => {
-    // Start the timer immediately on mount
     resetTimer()
-
-    // Attach activity listeners — each resets the countdown
-    ACTIVITY_EVENTS.forEach((event) =>
+    ACTIVITY_EVENTS.forEach(event =>
       window.addEventListener(event, resetTimer, { passive: true }),
     )
-
     return () => {
-      // Clean up on unmount
       if (timerRef.current) clearTimeout(timerRef.current)
-      ACTIVITY_EVENTS.forEach((event) =>
+      ACTIVITY_EVENTS.forEach(event =>
         window.removeEventListener(event, resetTimer),
       )
     }
   }, [resetTimer])
 }
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface WalletAsset {
+  code: string
+  issuer: string | null
+  balance: string
+}
+
 // ── Dashboard page ────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const router = useRouter()
-  // Activate inactivity lock for the entire dashboard session
   useInactivityLock()
 
   const [walletAddress, setWalletAddress] = useState<string | null>(null)
-  const [balance, setBalance] = useState<string | null>(null)
-  const [balances, setBalances] = useState<any[]>([])
-  const [isFunding, setIsFunding] = useState(false)
-  const [fundingError, setFundingError] = useState<string | null>(null)
+  const [assets, setAssets]               = useState<WalletAsset[]>([])
+  const [transactions, setTransactions]   = useState<TxRecord[]>([])
+  const [selectedTx, setSelectedTx]       = useState<TxRecord | null>(null)
+  const [loading, setLoading]             = useState(true)
+  const [isFunding, setIsFunding]         = useState(false)
+  const [fundingError, setFundingError]   = useState<string | null>(null)
 
   const isTestnet = process.env.NEXT_PUBLIC_NETWORK === 'testnet'
 
-  // Load wallet address on mount
   useEffect(() => {
     const stored = sessionStorage.getItem('invisible_wallet_address')
     setWalletAddress(stored)
   }, [])
 
-  const fetchBalance = useCallback(async () => {
-    if (!walletAddress) return
+  const fetchData = useCallback(async () => {
+    if (!walletAddress) { setLoading(false); return }
 
     const horizonUrl = isTestnet
       ? 'https://horizon-testnet.stellar.org'
       : 'https://horizon.stellar.org'
 
+    const server = new Server(horizonUrl)
+
     try {
-      const res = await fetch(`${horizonUrl}/accounts/${walletAddress}`)
-      if (res.status === 404) {
-        setBalance('0')
-        setBalances([])
-        return
+      // ── Balances ────────────────────────────────────────────────────────────
+      const account = await server.loadAccount(walletAddress)
+      const walletAssets: WalletAsset[] = account.balances.map(b => {
+        if (b.asset_type === 'native') return { code: 'XLM', issuer: null, balance: b.balance }
+        const issued = b as { asset_code: string; asset_issuer: string; balance: string }
+        return { code: issued.asset_code, issuer: issued.asset_issuer, balance: issued.balance }
+      })
+      setAssets(walletAssets)
+
+      // ── Recent payments ──────────────────────────────────────────────────────
+      const payments = await server
+        .payments()
+        .forAccount(walletAddress)
+        .limit(20)
+        .order('desc')
+        .call()
+
+      type HorizonPayment = {
+        id: string; type: string; from: string; to: string
+        amount: string; asset_type: string; asset_code?: string
+        created_at: string; transaction_hash: string
+        transaction?: { memo?: string }
       }
-      if (res.ok) {
-        const data = await res.json()
-        setBalances(data.balances)
-        const native = data.balances.find((b: any) => b.asset_type === 'native')
-        setBalance(native?.balance || '0')
-      }
-    } catch (err) {
-      console.error('Balance fetch failed', err)
+
+      const txRecords: TxRecord[] = (payments.records as HorizonPayment[])
+        .filter(p => p.type === 'payment')
+        .map(p => ({
+          id:           p.id,
+          type:         p.from === walletAddress ? 'sent' : 'received',
+          amount:       p.amount,
+          asset:        p.asset_type === 'native' ? 'XLM' : (p.asset_code ?? ''),
+          counterparty: p.from === walletAddress ? p.to : p.from,
+          timestamp:    Math.floor(new Date(p.created_at).getTime() / 1000),
+          hash:         p.transaction_hash,
+          memo:         p.transaction?.memo,
+        }))
+
+      setTransactions(txRecords)
+    } catch {
+      // Account may not yet be funded on testnet
+    } finally {
+      setLoading(false)
     }
   }, [walletAddress, isTestnet])
 
   useEffect(() => {
-    fetchBalance()
-  }, [fetchBalance])
+    fetchData()
+  }, [fetchData])
+
+  const xlmBalance = assets.find(a => a.code === 'XLM')?.balance ?? null
 
   const handleFund = async () => {
     if (!walletAddress) return
@@ -106,9 +135,9 @@ export default function DashboardPage() {
     try {
       const res = await fetch(`https://friendbot.stellar.org/?addr=${walletAddress}`)
       if (!res.ok) throw new Error('Friendbot failed')
-      await new Promise((r) => setTimeout(r, 2000)) // Wait for ledger close ingestion
-      await fetchBalance()
-    } catch (err) {
+      await new Promise(r => setTimeout(r, 2000))
+      await fetchData()
+    } catch {
       setFundingError('Funding failed. Please try again.')
     } finally {
       setIsFunding(false)
@@ -118,13 +147,15 @@ export default function DashboardPage() {
   return (
     <div className="wallet-shell">
 
-      {/* ── Header — .wallet-nav from globals.css ── */}
+      {/* Header */}
       <header className="wallet-nav">
-        {/* Wordmark — Anton ALL CAPS per Stellar brand manual */}
-        <span style={{ fontFamily: 'Anton, Impact, sans-serif', fontSize: '1.25rem', letterSpacing: '0.08em', color: 'var(--gold)', userSelect: 'none' }}>
+        <span style={{
+          fontFamily: 'Anton, Impact, sans-serif',
+          fontSize: '1.25rem', letterSpacing: '0.08em',
+          color: 'var(--gold)', userSelect: 'none',
+        }}>
           VEIL
         </span>
-        {/* Wallet address chip — Inconsolata font per brand */}
         {walletAddress && (
           <span className="address-chip">
             {walletAddress.slice(0, 6)}…{walletAddress.slice(-6)}
@@ -132,12 +163,13 @@ export default function DashboardPage() {
         )}
       </header>
 
-      {/* ── Main content — .wallet-main from globals.css ── */}
       <main className="wallet-main" style={{ paddingTop: '3rem', paddingBottom: '3rem' }}>
 
         <div style={{ marginBottom: '2rem' }}>
-          {/* Heading — Lora SemiBold Italic per brand */}
-          <h1 style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '1.75rem', color: 'var(--off-white)', marginBottom: '0.25rem' }}>
+          <h1 style={{
+            fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic',
+            fontSize: '1.75rem', color: 'var(--off-white)', marginBottom: '0.25rem',
+          }}>
             Dashboard
           </h1>
           <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.5)' }}>
@@ -146,19 +178,19 @@ export default function DashboardPage() {
         </div>
 
         {/* ── Balance Display ── */}
-        <div style={{ marginBottom: '3rem' }}>
+        <div style={{ marginBottom: '2rem' }}>
           <p style={{ fontSize: '0.75rem', fontFamily: 'Anton, Impact, sans-serif', color: 'var(--warm-grey)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
             AVAILABLE BALANCE
           </p>
           <div style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '2.5rem', color: 'var(--off-white)' }}>
-            {balance !== null 
-              ? `${parseFloat(balance).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 7 })} XLM` 
+            {xlmBalance !== null
+              ? `${parseFloat(xlmBalance).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 7 })} XLM`
               : '—'
             }
           </div>
 
           {/* Faucet button for zero-balance testnet wallets */}
-          {isTestnet && balance === '0' && (
+          {isTestnet && xlmBalance === '0' && (
             <div style={{ marginTop: '1.25rem' }}>
               <button
                 className="btn-ghost"
@@ -172,7 +204,6 @@ export default function DashboardPage() {
                   'Fund with testnet XLM'
                 )}
               </button>
-
               {fundingError && (
                 <p style={{ color: 'var(--teal)', fontSize: '0.75rem', marginTop: '0.75rem' }}>
                   {fundingError}
@@ -191,7 +222,7 @@ export default function DashboardPage() {
           />
           <ActionButton
             label="Receive"
-            onClick={() => {}} // Placeholder or copy address
+            onClick={() => {}}
             icon={<path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>}
           />
           <ActionButton
@@ -201,42 +232,101 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* ── Assets List ── */}
-        <div>
-          <p style={{ fontSize: '0.75rem', fontFamily: 'Anton, Impact, sans-serif', color: 'var(--warm-grey)', letterSpacing: '0.08em', marginBottom: '1rem' }}>
+        {/* ── Assets section ── */}
+        <section style={{ marginBottom: '2rem' }}>
+          <h2 style={{ fontSize: '0.75rem', fontFamily: 'Anton, Impact, sans-serif', color: 'var(--warm-grey)', letterSpacing: '0.08em', marginBottom: '0.75rem' }}>
             ASSETS
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {balances.length === 0 ? (
-              <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
-                <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)' }}>No assets found</p>
-              </div>
-            ) : (
-              balances.map((b, i) => (
-                <div key={i} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          </h2>
+          {loading ? (
+            <div className="card" style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+              <div className="spinner spinner-light" />
+            </div>
+          ) : assets.length === 0 ? (
+            <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+              <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)' }}>
+                No assets found. Fund this address on Stellar Testnet to get started.
+              </p>
+            </div>
+          ) : (
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+              {assets.map(asset => (
+                <div
+                  key={`${asset.code}-${asset.issuer ?? 'native'}`}
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                >
                   <div>
-                    <p style={{ fontWeight: 600, fontSize: '1rem' }}>
-                      {b.asset_code || 'XLM'}
+                    <p style={{ fontWeight: 500 }}>{asset.code}</p>
+                    {asset.issuer && (
+                      <p style={{ fontSize: '0.6875rem', color: 'rgba(246,247,248,0.35)', fontFamily: 'Inconsolata, monospace', marginTop: '0.125rem' }}>
+                        {asset.issuer.slice(0, 6)}…{asset.issuer.slice(-6)}
+                      </p>
+                    )}
+                  </div>
+                  <span style={{ fontFamily: 'Inconsolata, monospace', fontSize: '1rem' }}>
+                    {parseFloat(asset.balance).toFixed(2)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* ── Activity section ── */}
+        <section>
+          <h2 style={{ fontSize: '0.75rem', fontFamily: 'Anton, Impact, sans-serif', color: 'var(--warm-grey)', letterSpacing: '0.08em', marginBottom: '0.75rem' }}>
+            ACTIVITY
+          </h2>
+          {!loading && transactions.length === 0 && (
+            <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+              <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)' }}>
+                No transactions yet.
+              </p>
+            </div>
+          )}
+          {transactions.length > 0 && (
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              {transactions.map((tx, i) => (
+                <button
+                  key={tx.id}
+                  onClick={() => setSelectedTx(tx)}
+                  aria-label={`${tx.type === 'sent' ? 'Sent' : 'Received'} ${tx.amount} ${tx.asset}`}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    width: '100%', padding: '0.875rem 1rem',
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    borderBottom: i < transactions.length - 1 ? '1px solid var(--border-dim)' : 'none',
+                    color: 'var(--off-white)', textAlign: 'left',
+                    transition: 'background 100ms',
+                  }}
+                >
+                  <div>
+                    <p style={{ fontSize: '0.875rem', fontWeight: 500 }}>
+                      {tx.type === 'sent' ? '↑ Sent' : '↓ Received'}
                     </p>
-                    <p style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)' }}>
-                      {b.asset_type === 'native' ? 'Stellar' : b.asset_issuer.slice(0, 4) + '...' + b.asset_issuer.slice(-4)}
+                    <p style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', marginTop: '0.125rem', fontFamily: 'Inconsolata, monospace' }}>
+                      {tx.counterparty.slice(0, 6)}…{tx.counterparty.slice(-6)}
                     </p>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <p style={{ fontFamily: 'Inconsolata, monospace', fontWeight: 500 }}>
-                      {parseFloat(b.balance).toLocaleString(undefined, { maximumFractionDigits: 5 })}
+                    <p style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.9375rem' }}>
+                      {tx.amount} {tx.asset}
                     </p>
                   </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
 
       </main>
+
+      {selectedTx && (
+        <TxDetailSheet tx={selectedTx} onClose={() => setSelectedTx(null)} />
+      )}
     </div>
   )
 }
+
 function ActionButton({ label, onClick, icon }: { label: string; onClick: () => void; icon: React.ReactNode }) {
   return (
     <button
