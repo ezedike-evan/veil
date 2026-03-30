@@ -1,7 +1,16 @@
-use soroban_sdk::{Bytes, BytesN, Env};
+use soroban_sdk::{contracttype, Bytes, BytesN, Env};
 use p256::ecdsa::{VerifyingKey, Signature, signature::hazmat::PrehashVerifier};
 use sha2::{Sha256, Digest};
 use crate::WalletError;
+
+#[contracttype]
+pub struct WebAuthnSignature {
+    pub public_key: BytesN<65>,
+    pub auth_data: Bytes,
+    pub client_data_json: Bytes,
+    pub signature: BytesN<64>,
+    pub nonce: u64,
+}
 
 const BASE64URL: &[u8] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -216,4 +225,14 @@ pub fn verify_webauthn(
 
     verifying_key.verify_prehash(&message_hash, &sig_obj)
         .map_err(|_| WalletError::SignatureVerificationFailed)
+}
+
+use soroban_sdk::{Bytes, BytesN};
+
+pub struct WebAuthnSignature {
+    pub public_key: BytesN<65>,
+    pub auth_data: Bytes,
+    pub client_data_json: Bytes,
+    pub signature: BytesN<64>,
+    pub nonce: u64, // ✅ NEW FIELD
 }

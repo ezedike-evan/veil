@@ -1,4 +1,4 @@
-﻿#![no_std]
+#![no_std]
 use soroban_sdk::{
     contract, contractimpl, contracterror,
     Env, Address, Bytes, BytesN, Vec, Symbol, Val,
@@ -41,6 +41,8 @@ pub enum WalletError {
     RecoveryNotPending          = 14,
     /// The recovery timelock has not yet expired.
     RecoveryTimelockActive      = 15,
+    /// The submitted nonce does not match the on-chain nonce (replay or out-of-order).
+    NonceMismatch               = 16,
 }
 
 #[contract]
@@ -69,6 +71,8 @@ impl InvisibleWallet {
         storage::init_signers(&env, &initial_signer);
         storage::set_rp_id(&env, &rp_id);
         storage::set_origin(&env, &origin);
+        // Step 0 — Initialise nonce to 0 (explicitly, though storage helper defaults to 0).
+        env.storage().instance().set(&DataKey::Nonce, &0u64);
         Ok(())
     }
 
@@ -120,7 +124,7 @@ impl InvisibleWallet {
         _auth_contexts: Vec<Context>,
     ) -> Result<(), WalletError> {
         let parts: Vec<Val> = Vec::from_val(&env, &signature);
-        if parts.len() != 4 {
+        if parts.len() != 5 {
             return Err(WalletError::InvalidSignatureFormat);
         }
 
@@ -140,9 +144,19 @@ impl InvisibleWallet {
             .get(3).ok_or(WalletError::InvalidSignatureFormat)?
             .try_into_val(&env).map_err(|_| WalletError::InvalidSignatureFormat)?;
 
-        // Check that the public key matches any registered signer
+        let nonce: u64 = parts
+            .get(4).ok_or(WalletError::InvalidSignatureFormat)?
+            .try_into_val(&env).map_err(|_| WalletError::InvalidSignatureFormat)?;
+
+        // Step 1 — Check registered signer
         if !storage::has_signer(&env, &public_key) {
             return Err(WalletError::SignerNotAuthorized);
+        }
+
+        // Step 2 — Nonce validation (MUST match exactly)
+        let stored_nonce = storage::get_nonce(&env);
+        if nonce != stored_nonce {
+            return Err(WalletError::NonceMismatch);
         }
 
         // Step 3 — ECDSA + challenge verification.
@@ -163,7 +177,15 @@ impl InvisibleWallet {
         let origin = storage::get_origin(&env).ok_or(WalletError::OriginMismatch)?;
         auth::verify_origin(&client_data_json, &origin)?;
 
+        // Step 6 — Increment nonce ONLY after all checks pass.
+        storage::increment_nonce(&env);
+
         Ok(())
+    }
+
+    /// Return the current monotonic nonce for this wallet.
+    pub fn get_nonce(env: Env) -> u64 {
+        storage::get_nonce(&env)
     }
 
     pub fn has_signer(env: Env, key: BytesN<65>) -> bool {
@@ -710,5 +732,113 @@ mod test {
 
         // And second signer is recognized
         assert!(client.has_signer(&BytesN::from_array(&env, &pub_bytes_2)));
+    }
+
+    // ── Nonce tests ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_nonce_accepted_on_first_use() {
+        let env = Env::default();
+        let (signing_key, pub_bytes) = test_keypair();
+        let payload = [7u8; 32];
+
+        // Init wallet
+        let contract_id = env.register_contract(None, InvisibleWallet);
+        let client = InvisibleWalletClient::new(&env, &contract_id);
+        let rp_id  = bytes_from_str(&env, "localhost");
+        let origin = bytes_from_str(&env, "https://test.example");
+        client.init(&BytesN::from_array(&env, &pub_bytes), &rp_id, &origin);
+
+        // Prep WebAuthn signature WITH nonce 0
+        let (auth_data_raw, challenge_b64, sig_bytes) =
+            make_webauthn_fixture(&signing_key, &payload, b"localhost");
+
+        // First auth with nonce 0 should succeed
+        let signature = Vec::from_array(&env, [
+            BytesN::from_array(&env, &pub_bytes).into_val(&env),
+            Bytes::from_array(&env, &auth_data_raw).into_val(&env),
+            build_client_data_json(&env, &challenge_b64).into_val(&env),
+            BytesN::from_array(&env, &sig_bytes).into_val(&env),
+            0u64.into_val(&env),
+        ]).into_val(&env);
+
+        client.__check_auth(&BytesN::from_array(&env, &payload), &signature, &Vec::new(&env));
+
+        // Nonce should now be 1
+        assert_eq!(client.get_nonce(), 1);
+    }
+
+    #[test]
+    fn test_nonce_replay_rejected() {
+        let env = Env::default();
+        let (signing_key, pub_bytes) = test_keypair();
+        let payload = [7u8; 32];
+
+        // Init wallet
+        let contract_id = env.register_contract(None, InvisibleWallet);
+        let client = InvisibleWalletClient::new(&env, &contract_id);
+        let rp_id  = bytes_from_str(&env, "localhost");
+        let origin = bytes_from_str(&env, "https://test.example");
+        client.init(&BytesN::from_array(&env, &pub_bytes), &rp_id, &origin);
+
+        // Prep WebAuthn signature WITH nonce 0
+        let (auth_data_raw, challenge_b64, sig_bytes) =
+            make_webauthn_fixture(&signing_key, &payload, b"localhost");
+
+        let signature = Vec::from_array(&env, [
+            BytesN::from_array(&env, &pub_bytes).into_val(&env),
+            Bytes::from_array(&env, &auth_data_raw).into_val(&env),
+            build_client_data_json(&env, &challenge_b64).into_val(&env),
+            BytesN::from_array(&env, &sig_bytes).into_val(&env),
+            0u64.into_val(&env),
+        ]).into_val(&env);
+
+        // First auth succeeds
+        client.__check_auth(&BytesN::from_array(&env, &payload), &signature, &Vec::new(&env));
+
+        // Second auth with SAME signature + SAME nonce 0 should FAIL (replay)
+        let result = client.try___check_auth(&BytesN::from_array(&env, &payload), &signature, &Vec::new(&env));
+        assert_eq!(result, Err(Ok(WalletError::NonceMismatch)));
+    }
+
+    #[test]
+    fn test_nonce_increments_correctly() {
+        let env = Env::default();
+        let (signing_key, pub_bytes) = test_keypair();
+        let payload = [7u8; 32];
+
+        // Init wallet
+        let contract_id = env.register_contract(None, InvisibleWallet);
+        let client = InvisibleWalletClient::new(&env, &contract_id);
+        let rp_id  = bytes_from_str(&env, "localhost");
+        let origin = bytes_from_str(&env, "https://test.example");
+        client.init(&BytesN::from_array(&env, &pub_bytes), &rp_id, &origin);
+
+        // 1. Success with nonce 0
+        let (auth_data_raw, challenge_b64, sig_bytes) =
+            make_webauthn_fixture(&signing_key, &payload, b"localhost");
+        let signature_0 = Vec::from_array(&env, [
+            BytesN::from_array(&env, &pub_bytes).into_val(&env),
+            Bytes::from_array(&env, &auth_data_raw).into_val(&env),
+            build_client_data_json(&env, &challenge_b64).into_val(&env),
+            BytesN::from_array(&env, &sig_bytes).into_val(&env),
+            0u64.into_val(&env),
+        ]).into_val(&env);
+        client.__check_auth(&BytesN::from_array(&env, &payload), &signature_0, &Vec::new(&env));
+        assert_eq!(client.get_nonce(), 1);
+
+        // 2. Success with nonce 1 (new operation)
+        let payload_2 = [8u8; 32];
+        let (auth_data_raw_2, challenge_b64_2, sig_bytes_2) =
+            make_webauthn_fixture(&signing_key, &payload_2, b"localhost");
+        let signature_1 = Vec::from_array(&env, [
+            BytesN::from_array(&env, &pub_bytes).into_val(&env),
+            Bytes::from_array(&env, &auth_data_raw_2).into_val(&env),
+            build_client_data_json(&env, &challenge_b64_2).into_val(&env),
+            BytesN::from_array(&env, &sig_bytes_2).into_val(&env),
+            1u64.into_val(&env),
+        ]).into_val(&env);
+        client.__check_auth(&BytesN::from_array(&env, &payload_2), &signature_1, &Vec::new(&env));
+        assert_eq!(client.get_nonce(), 2);
     }
 }

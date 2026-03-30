@@ -24,6 +24,8 @@ pub enum DataKey {
     Origin,
     /// Stores a PendingRecovery struct while a guardian recovery is in progress.
     RecoveryPending,
+    /// Strictly monotonic u64 nonce to prevent signature replay attacks.
+    Nonce,
 }
 
 // ── Signers (Map-based) ──────────────────────────────────────────────────────
@@ -112,4 +114,15 @@ pub fn set_origin(env: &Env, origin: &Bytes) {
 /// Retrieve the stored origin.
 pub fn get_origin(env: &Env) -> Option<Bytes> {
     env.storage().instance().get(&DataKey::Origin)
+}
+
+// ── Nonce ───────────────────────────────────────────────────────────────────
+
+pub fn get_nonce(env: &Env) -> u64 {
+    env.storage().instance().get(&DataKey::Nonce).unwrap_or(0u64)
+}
+
+pub fn increment_nonce(env: &Env) {
+    let current = get_nonce(env);
+    env.storage().instance().set(&DataKey::Nonce, &(current + 1));
 }
