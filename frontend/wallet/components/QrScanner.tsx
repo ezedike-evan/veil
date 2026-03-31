@@ -59,7 +59,7 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
             const codes = await detector.detect(video)
             for (const code of codes) {
               const addr = code.rawValue.trim()
-              if (addr.startsWith('G') && addr.length === 56) {
+              if ((addr.startsWith('G') || addr.startsWith('C')) && addr.length === 56) {
                 stop()
                 onScan(addr)
                 return
@@ -150,7 +150,7 @@ export function QrScanner({ onScan, onClose }: QrScannerProps) {
             marginTop: '0.875rem', fontSize: '0.75rem',
             color: 'rgba(246,247,248,0.35)', textAlign: 'center',
           }}>
-            Point camera at a Stellar address QR code
+            Point camera at a Stellar address QR code (G... or C...)
           </p>
         )}
 
