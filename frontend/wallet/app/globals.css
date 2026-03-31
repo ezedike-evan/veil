@@ -180,6 +180,23 @@ body {
   color: var(--gold);
 }
 
+/* ── Skeleton loading ────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(246,247,248,0.06) 0%,
+    rgba(246,247,248,0.12) 50%,
+    rgba(246,247,248,0.06) 100%
+  );
+  background-size: 400px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
 /* ── Spinner ─────────────────────────────────────────────────────────── */
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner {

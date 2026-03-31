@@ -311,12 +311,16 @@ export default function DashboardPage() {
           <p style={{ fontSize: '0.75rem', fontFamily: 'Anton, Impact, sans-serif', color: 'var(--warm-grey)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>
             AVAILABLE BALANCE
           </p>
-          <div style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '2.5rem', color: 'var(--off-white)' }}>
-            {xlmBalance !== null
-              ? `${parseFloat(xlmBalance).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 7 })} XLM`
-              : '—'
-            }
-          </div>
+          {loading ? (
+            <div className="skeleton" style={{ width: '220px', height: '3rem', borderRadius: '8px' }} />
+          ) : (
+            <div style={{ fontFamily: 'Lora, Georgia, serif', fontWeight: 600, fontStyle: 'italic', fontSize: '2.5rem', color: 'var(--off-white)' }}>
+              {xlmBalance !== null
+                ? `${parseFloat(xlmBalance).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 7 })} XLM`
+                : '—'
+              }
+            </div>
+          )}
 
           {/* Faucet button for unfunded or zero-balance testnet wallets */}
           {isTestnet && !loading && (xlmBalance === null || xlmBalance === '0') && (
@@ -367,8 +371,11 @@ export default function DashboardPage() {
             ASSETS
           </h2>
           {loading ? (
-            <div className="card" style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
-              <div className="spinner spinner-light" />
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div className="skeleton" style={{ width: '48px', height: '1.125rem' }} />
+                <div className="skeleton" style={{ width: '80px', height: '1.125rem' }} />
+              </div>
             </div>
           ) : assets.length === 0 ? (
             <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
@@ -417,6 +424,23 @@ export default function DashboardPage() {
               Refresh
             </button>
           </div>
+          {loading && (
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              {[1, 2, 3].map(i => (
+                <div key={i} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '0.875rem 1rem',
+                  borderBottom: i < 3 ? '1px solid var(--border-dim)' : 'none',
+                }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                    <div className="skeleton" style={{ width: '48px', height: '0.875rem' }} />
+                    <div className="skeleton" style={{ width: '96px', height: '0.75rem' }} />
+                  </div>
+                  <div className="skeleton" style={{ width: '72px', height: '0.9375rem' }} />
+                </div>
+              ))}
+            </div>
+          )}
           {!loading && transactions.length === 0 && (
             <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
               <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)' }}>
