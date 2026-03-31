@@ -38,6 +38,13 @@ export default function DashboardPage() {
     const stored = sessionStorage.getItem('invisible_wallet_address')
     if (!stored) { router.replace('/lock'); return }
     setWalletAddress(stored)
+
+    // Ensure veil_signer_secret is in localStorage so it survives lock/unlock.
+    // Wallets created before this fix only had it in sessionStorage.
+    const secret = sessionStorage.getItem('veil_signer_secret')
+    if (secret && !localStorage.getItem('veil_signer_secret')) {
+      localStorage.setItem('veil_signer_secret', secret)
+    }
   }, [router])
 
   const fetchData = useCallback(async () => {
@@ -201,8 +208,14 @@ export default function DashboardPage() {
       if (!signerPublicKey) {
         const newKp = Keypair.random()
         localStorage.setItem('veil_signer_public_key', newKp.publicKey())
+        localStorage.setItem('veil_signer_secret', newKp.secret())
         sessionStorage.setItem('veil_signer_secret', newKp.secret())
         signerPublicKey = newKp.publicKey()
+      }
+      // Always ensure the secret is persisted to localStorage so it survives lock/unlock
+      const currentSecret = sessionStorage.getItem('veil_signer_secret')
+      if (currentSecret && !localStorage.getItem('veil_signer_secret')) {
+        localStorage.setItem('veil_signer_secret', currentSecret)
       }
       const res = await fetch(`https://friendbot.stellar.org/?addr=${signerPublicKey}`)
       if (!res.ok) {

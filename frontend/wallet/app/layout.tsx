@@ -7,10 +7,6 @@ export const metadata: Metadata = {
   description: 'Your passkey-powered Stellar wallet. No seed phrases. No private keys. Just your fingerprint.',
   keywords: ['Stellar', 'Soroban', 'WebAuthn', 'passkey', 'wallet', 'biometric'],
   manifest: '/manifest.json',
-  appleWebApp: {
-    statusBarStyle: 'default',
-    title: 'Veil Wallet',
-  },
   openGraph: {
     title: 'Veil Wallet',
     description: 'Passkey-powered Stellar smart wallet.',

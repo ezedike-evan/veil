@@ -18,13 +18,10 @@ export function InstallBanner() {
   const [platform, setPlatform] = useState<'ios' | 'android' | null>(null)
 
   useEffect(() => {
-    // 1. Check if user already dismissed recently (7-day cooldown)
+    // 1. Check if dismissed this session (immediate) or within 7 days (localStorage)
+    if (sessionStorage.getItem('veil_install_dismissed')) return
     const dismissedAt = localStorage.getItem('veil_install_dismissed')
-    if (dismissedAt) {
-      const now = Date.now()
-      const sevenDays = 7 * 24 * 60 * 60 * 1000
-      if (now - parseInt(dismissedAt) < sevenDays) return
-    }
+    if (dismissedAt && Date.now() - parseInt(dismissedAt) < 7 * 24 * 60 * 60 * 1000) return
 
     // 2. Detect if already installed (standalone mode)
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || ('standalone' in window.navigator && (window.navigator as any).standalone)
@@ -51,6 +48,7 @@ export function InstallBanner() {
   }, [])
 
   const handleDismiss = () => {
+    sessionStorage.setItem('veil_install_dismissed', '1')
     localStorage.setItem('veil_install_dismissed', Date.now().toString())
     setShow(false)
   }
