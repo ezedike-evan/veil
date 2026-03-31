@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Horizon, Keypair, rpc as SorobanRpc, Contract, Account,
@@ -8,40 +8,7 @@ import {
 } from '@stellar/stellar-sdk'
 const Server = Horizon.Server
 import { TxDetailSheet, type TxRecord } from '@/components/TxDetailSheet'
-
-// ── Inactivity lock ───────────────────────────────────────────────────────────
-const LOCK_TIMEOUT_MS = 5 * 60 * 1000
-const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'touchstart', 'click', 'scroll'] as const
-
-function useInactivityLock() {
-  const router          = useRouter()
-  const timerRef        = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const lastActivityRef = useRef<number>(Date.now())
-
-  const lock = useCallback(() => {
-    sessionStorage.clear()
-    router.replace('/lock')
-  }, [router])
-
-  const resetTimer = useCallback(() => {
-    lastActivityRef.current = Date.now()
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(lock, LOCK_TIMEOUT_MS)
-  }, [lock])
-
-  useEffect(() => {
-    resetTimer()
-    ACTIVITY_EVENTS.forEach(event =>
-      window.addEventListener(event, resetTimer, { passive: true }),
-    )
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current)
-      ACTIVITY_EVENTS.forEach(event =>
-        window.removeEventListener(event, resetTimer),
-      )
-    }
-  }, [resetTimer])
-}
+import { useInactivityLock } from '@/hooks/useInactivityLock'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

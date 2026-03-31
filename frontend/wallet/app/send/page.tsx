@@ -10,6 +10,7 @@ const Server = Horizon.Server
 import { VeilLogo } from '@/components/VeilLogo'
 import { ContactPicker } from '@/components/ContactPicker'
 import { QrScanner } from '@/components/QrScanner'
+import { useInactivityLock } from '@/hooks/useInactivityLock'
 
 type Step = 'form' | 'confirm' | 'signing' | 'done' | 'error'
 
@@ -21,6 +22,7 @@ interface WalletAsset {
 
 export default function SendPage() {
   const router = useRouter()
+  useInactivityLock()
   const [step, setStep]               = useState<Step>('form')
   const [recipient, setRecipient]     = useState('')
   const [amount, setAmount]           = useState('')

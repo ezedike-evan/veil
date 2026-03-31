@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Keypair, Networks, TransactionBuilder, BASE_FEE, Operation, Asset, Memo, Horizon } from '@stellar/stellar-sdk'
 const Server = Horizon.Server
 import { VeilLogo } from '@/components/VeilLogo'
+import { useInactivityLock } from '@/hooks/useInactivityLock'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const DEBOUNCE_MS = 500
@@ -25,6 +26,7 @@ interface StellarAsset {
 // ── Swap Page ─────────────────────────────────────────────────────────────────
 export default function SwapPage() {
   const router = useRouter()
+  useInactivityLock()
   const [step, setStep] = useState<Step>('form')
   const [walletAddress, setWalletAddress] = useState<string | null>(null)
   
