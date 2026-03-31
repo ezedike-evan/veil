@@ -84,8 +84,8 @@ export default function DashboardPage() {
     const signerSecret    = sessionStorage.getItem('veil_signer_secret')
     const signerPublicKey = signerSecret
       ? Keypair.fromSecret(signerSecret).publicKey()
-      : localStorage.getItem('veil_signer_public_key')
-    const accountToLoad = signerPublicKey ?? walletAddress
+      : (localStorage.getItem('veil_signer_public_key') || null)
+    const accountToLoad = signerPublicKey || walletAddress
 
     try {
       // ── Balances ────────────────────────────────────────────────────────────
@@ -145,11 +145,18 @@ export default function DashboardPage() {
     try {
       // Friendbot only funds classic G... accounts, not C... contract addresses.
       // Derive the G... public key from session secret or fall back to localStorage.
-      const signerSecret    = sessionStorage.getItem('veil_signer_secret')
-      const signerPublicKey = signerSecret
+      const signerSecret = sessionStorage.getItem('veil_signer_secret')
+      let signerPublicKey = signerSecret
         ? Keypair.fromSecret(signerSecret).publicKey()
-        : localStorage.getItem('veil_signer_public_key')
-      if (!signerPublicKey) throw new Error('Fee-payer address not found. Please create a new wallet.')
+        : (localStorage.getItem('veil_signer_public_key') || null)
+
+      // After cross-device recovery there is no fee-payer yet — auto-create one.
+      if (!signerPublicKey) {
+        const newKp = Keypair.random()
+        localStorage.setItem('veil_signer_public_key', newKp.publicKey())
+        sessionStorage.setItem('veil_signer_secret', newKp.secret())
+        signerPublicKey = newKp.publicKey()
+      }
       const res = await fetch(`https://friendbot.stellar.org/?addr=${signerPublicKey}`)
       if (!res.ok) {
         // 400 means the account is already funded — just refresh balances

@@ -138,8 +138,9 @@ export default function RecoverPage() {
       localStorage.setItem('invisible_wallet_address',    walletAddress)
       localStorage.setItem('invisible_wallet_key_id',     assertion.id)
       localStorage.setItem('invisible_wallet_public_key', matchedHex)
-      localStorage.setItem('veil_signer_public_key',
-        localStorage.getItem('veil_signer_public_key') ?? '')
+      // veil_signer_public_key is the fee-payer G... address and is device-specific.
+      // Don't overwrite or clear it — if it exists on this device it should stay;
+      // if not, the dashboard will auto-create a new fee-payer when the user taps Faucet.
       sessionStorage.setItem('invisible_wallet_address', walletAddress)
 
       setStep('done')
