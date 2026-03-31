@@ -55,8 +55,23 @@ export default function RecoverPage() {
       const simResult  = (sim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result
       if (!simResult) throw new Error('No result from contract simulation.')
 
-      const signersMap = scValToNative(simResult.retval) as Map<number, Uint8Array>
-      const publicKeys = Array.from(signersMap.values())
+      // Parse the XDR ScVal directly — avoids scValToNative runtime differences
+      // get_signers returns Map<u32, BytesN<65>> → SCV_MAP of (SCV_U32, SCV_BYTES) entries
+      let publicKeys: Uint8Array[] = []
+      try {
+        const entries = simResult.retval.map() as Array<{ val: () => { bytes: () => Buffer } }>
+        publicKeys = entries.map(e => new Uint8Array(e.val().bytes()))
+      } catch {
+        // Fallback: scValToNative handles all possible return shapes
+        const raw = scValToNative(simResult.retval)
+        if (Array.isArray(raw)) {
+          publicKeys = raw as Uint8Array[]
+        } else if (raw instanceof Map) {
+          publicKeys = Array.from((raw as Map<number, Uint8Array>).values())
+        } else {
+          publicKeys = Object.values(raw as Record<string, Uint8Array>)
+        }
+      }
       if (publicKeys.length === 0) throw new Error('No signers found on this wallet.')
 
       // ── 2. Discoverable passkey assertion ────────────────────────────────
