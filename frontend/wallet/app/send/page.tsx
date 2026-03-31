@@ -47,7 +47,14 @@ export default function SendPage() {
     // Horizon doesn't support loadAccount for C... contract addresses.
     const signerPublicKey = sessionStorage.getItem('veil_signer_secret')
       ? Keypair.fromSecret(sessionStorage.getItem('veil_signer_secret')!).publicKey()
-      : localStorage.getItem('veil_signer_public_key') ?? addr
+      : localStorage.getItem('veil_signer_public_key') || null
+    if (!signerPublicKey || !signerPublicKey.startsWith('G')) {
+      // No fee-payer G... key available yet — default to XLM
+      const xlm: WalletAsset = { code: 'XLM', issuer: null, contractId: Asset.native().contractId(Networks.TESTNET) }
+      setAssets([xlm])
+      setSelectedAsset(xlm)
+      return
+    }
     const server = new Server('https://horizon-testnet.stellar.org')
     server.loadAccount(signerPublicKey).then(account => {
       const list: WalletAsset[] = account.balances.map(b => {

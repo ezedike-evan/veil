@@ -8,7 +8,6 @@ export const metadata: Metadata = {
   keywords: ['Stellar', 'Soroban', 'WebAuthn', 'passkey', 'wallet', 'biometric'],
   manifest: '/manifest.json',
   appleWebApp: {
-    capable: true,
     statusBarStyle: 'default',
     title: 'Veil Wallet',
   },
