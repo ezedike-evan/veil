@@ -151,7 +151,14 @@ export default function DashboardPage() {
         : localStorage.getItem('veil_signer_public_key')
       if (!signerPublicKey) throw new Error('Fee-payer address not found. Please create a new wallet.')
       const res = await fetch(`https://friendbot.stellar.org/?addr=${signerPublicKey}`)
-      if (!res.ok) throw new Error('Friendbot failed')
+      if (!res.ok) {
+        // 400 means the account is already funded — just refresh balances
+        if (res.status === 400) {
+          await fetchData()
+          return
+        }
+        throw new Error('Friendbot failed')
+      }
       await new Promise(r => setTimeout(r, 2000))
       await fetchData()
     } catch (err: unknown) {
