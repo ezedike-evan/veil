@@ -69,8 +69,9 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const stored = sessionStorage.getItem('invisible_wallet_address')
+    if (!stored) { router.replace('/lock'); return }
     setWalletAddress(stored)
-  }, [])
+  }, [router])
 
   const fetchData = useCallback(async () => {
     if (!walletAddress) { setLoading(false); return }

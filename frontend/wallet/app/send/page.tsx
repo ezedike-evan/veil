@@ -36,7 +36,9 @@ export default function SendPage() {
 
   useEffect(() => {
     const addr = sessionStorage.getItem('invisible_wallet_address')
-    if (!addr) { router.replace('/'); return }
+    if (!addr) { router.replace('/lock'); return }
+    const secret = sessionStorage.getItem('veil_signer_secret')
+    if (!secret) { router.replace('/lock'); return }
 
     // Check camera/QR scanner availability before showing scan button
     if (typeof (window as unknown as { BarcodeDetector?: unknown }).BarcodeDetector !== 'undefined' || !!navigator.mediaDevices?.getUserMedia) {

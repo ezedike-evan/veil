@@ -47,10 +47,9 @@ export default function SwapPage() {
   // ── Load session ──
   useEffect(() => {
     const addr = sessionStorage.getItem('invisible_wallet_address')
-    if (!addr) {
-      router.replace('/lock')
-      return
-    }
+    if (!addr) { router.replace('/lock'); return }
+    const secret = sessionStorage.getItem('veil_signer_secret')
+    if (!secret) { router.replace('/lock'); return }
     setWalletAddress(addr)
     fetchBalances(addr)
   }, [router])
