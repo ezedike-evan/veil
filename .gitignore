@@ -19,3 +19,4 @@ frontend/wallet/.next/
 *.env
 .DS_Store
 build_error.txt
+TODO.md
