@@ -55,10 +55,16 @@ export default function AgentPage() {
     } catch { return '' }
   })()
 
-  useEffect(() => {
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const connect = useCallback(() => {
     const wsUrl = process.env.NEXT_PUBLIC_AGENT_WS_URL ?? 'ws://localhost:3001'
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
+
+    ws.onclose = () => {
+      reconnectTimer.current = setTimeout(connect, 2000)
+    }
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
@@ -89,9 +95,15 @@ export default function AgentPage() {
         ])
       }
     }
-
-    return () => ws.close()
   }, [])
+
+  useEffect(() => {
+    connect()
+    return () => {
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
+      wsRef.current?.close()
+    }
+  }, [connect])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
