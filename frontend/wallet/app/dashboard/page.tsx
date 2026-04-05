@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Image from 'next/image'
 import {
   Horizon, Keypair, rpc as SorobanRpc, Contract, Account,
   TransactionBuilder, BASE_FEE, Networks, Asset, nativeToScVal, scValToNative,
@@ -49,7 +50,8 @@ export default function DashboardPage() {
   }, [router])
 
   const fetchData = useCallback(async () => {
-    if (!walletAddress) { setLoading(false); return }
+    if (!walletAddress) return   // keep loading=true until address is ready
+    setLoading(true)
 
     const horizonUrl = isTestnet
       ? 'https://horizon-testnet.stellar.org'
@@ -416,25 +418,43 @@ export default function DashboardPage() {
               </p>
             </div>
           ) : (
-            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-              {assets.map(asset => (
-                <div
-                  key={`${asset.code}-${asset.issuer ?? 'native'}`}
-                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                >
-                  <div>
-                    <p style={{ fontWeight: 500 }}>{asset.code}</p>
-                    {asset.issuer && (
-                      <p style={{ fontSize: '0.6875rem', color: 'rgba(246,247,248,0.35)', fontFamily: 'Inconsolata, monospace', marginTop: '0.125rem' }}>
-                        {asset.issuer.slice(0, 6)}…{asset.issuer.slice(-6)}
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              {assets.map((asset, i) => {
+                const tokenHref = asset.issuer
+                  ? `/token/${asset.code}?issuer=${asset.issuer}`
+                  : `/token/${asset.code}`
+                return (
+                  <button
+                    key={`${asset.code}-${asset.issuer ?? 'native'}`}
+                    onClick={() => router.push(tokenHref)}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      width: '100%', padding: '0.875rem 1.25rem',
+                      background: 'none', border: 'none', cursor: 'pointer', color: 'var(--off-white)',
+                      borderBottom: i < assets.length - 1 ? '1px solid var(--border-dim)' : 'none',
+                      transition: 'background 100ms', textAlign: 'left',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <TokenIcon code={asset.code} size={36} />
+                      <div>
+                        <p style={{ fontWeight: 500, fontSize: '0.9375rem' }}>{asset.code}</p>
+                        <p style={{ fontSize: '0.6875rem', color: 'rgba(246,247,248,0.35)', marginTop: '0.125rem' }}>
+                          {asset.code === 'XLM' ? 'Stellar Lumens' : asset.code === 'USDC' ? 'USD Coin' : asset.issuer ? `${asset.issuer.slice(0, 6)}…${asset.issuer.slice(-4)}` : 'Token'}
+                        </p>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <p style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.9375rem', fontWeight: 500 }}>
+                        {parseFloat(asset.balance).toFixed(2)}
                       </p>
-                    )}
-                  </div>
-                  <span style={{ fontFamily: 'Inconsolata, monospace', fontSize: '1rem' }}>
-                    {parseFloat(asset.balance).toFixed(2)}
-                  </span>
-                </div>
-              ))}
+                      <p style={{ fontSize: '0.6875rem', color: 'rgba(246,247,248,0.35)', marginTop: '0.125rem' }}>
+                        {asset.code}
+                      </p>
+                    </div>
+                  </button>
+                )
+              })}
             </div>
           )}
         </section>
@@ -565,6 +585,27 @@ export default function DashboardPage() {
       {selectedTx && (
         <TxDetailSheet tx={selectedTx} onClose={() => setSelectedTx(null)} />
       )}
+    </div>
+  )
+}
+
+const TOKEN_LOGOS: Record<string, string> = {
+  XLM:  '/tokens/xlm.png',
+  USDC: '/tokens/usdc.png',
+}
+
+function TokenIcon({ code, size = 32 }: { code: string; size?: number }) {
+  const src = TOKEN_LOGOS[code.toUpperCase()]
+  if (src) {
+    return (
+      <div style={{ width: size, height: size, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, background: code === 'XLM' ? '#000' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Image src={src} alt={code} width={size} height={size} style={{ objectFit: 'contain', ...(code === 'XLM' ? { filter: 'invert(1)', padding: '4px' } : {}) }} />
+      </div>
+    )
+  }
+  return (
+    <div style={{ width: size, height: size, borderRadius: '50%', background: 'rgba(253,218,36,0.12)', border: '1px solid rgba(253,218,36,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: size * 0.38, fontWeight: 700, color: 'var(--gold)', flexShrink: 0 }}>
+      {code[0]}
     </div>
   )
 }
