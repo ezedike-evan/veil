@@ -134,37 +134,58 @@ export default function SwapPage() {
         return
       }
       const signerKeypair = Keypair.fromSecret(signerSecret)
-      const account = await server.loadAccount(signerKeypair.publicKey())
+      const signerPubKey = signerKeypair.publicKey()
+      const account = await server.loadAccount(signerPubKey)
 
       const source = (sourceAsset!.code === 'XLM' || !sourceAsset!.issuer) ? Asset.native() : new Asset(sourceAsset!.code, sourceAsset!.issuer!)
       const dest = (destAsset.code === 'XLM' || !destAsset.issuer) ? Asset.native() : new Asset(destAsset.code, destAsset.issuer!)
-      
+
       // destinationMin = estimatedAmount * (1 - slippage)
       const destMin = (parseFloat(destAmount) * (1 - SLIPPAGE_TOLERANCE)).toFixed(7)
+
+      // Check if fee-payer already has a trustline for the destination asset
+      const hasTrustline = dest.isNative() ||
+        account.balances.some((b: any) =>
+          b.asset_code === dest.getCode() && b.asset_issuer === dest.getIssuer()
+        )
 
       const txBuilder = new TransactionBuilder(account, {
         fee: BASE_FEE,
         networkPassphrase: Networks.TESTNET,
       })
+
+      // Auto-add trustline if needed so destination can receive the asset
+      if (!hasTrustline) {
+        txBuilder.addOperation(
+          Operation.changeTrust({ asset: dest })
+        )
+      }
+
+      txBuilder
         .addOperation(
           Operation.pathPaymentStrictSend({
             sendAsset: source,
             sendAmount: sourceAmount,
-            destination: signerKeypair.publicKey(),
+            destination: signerPubKey,
             destAsset: dest,
             destMin: destMin,
             path: path,
           })
         )
         .setTimeout(30)
-      
+
       const tx = txBuilder.build()
       tx.sign(signerKeypair)
       const result = await server.submitTransaction(tx)
       setTxHash(result.hash)
       setStep('done')
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
+      // Extract Stellar result codes from the error response if available
+      const horizonError = (err as any)?.response?.data
+      const codes = horizonError?.extras?.result_codes
+      const msg = codes
+        ? `${codes.transaction ?? ''} — ${(codes.operations ?? []).join(', ')}`.trim().replace(/^—\s*/, '')
+        : err instanceof Error ? err.message : String(err)
       setErrorMsg(msg)
       setStep('error')
     } finally {
