@@ -145,9 +145,10 @@ export async function runAgent(userMessage, walletAddress, agentKeypair, convers
                 return JSON.stringify({ sorobanTransfers, classicPayments });
             }
             case 'get_wallet_balance': {
-                // Horizon can't load C... contract addresses — use fee-payer G... address
-                const queryAddress = feePayerAddress ?? input.address;
-                const balances = await getBalances(queryAddress);
+                // Fee-payer G... for Horizon; walletAddress C... for Soroban RPC contract XLM
+                const fpAddress = feePayerAddress ?? input.address;
+                const contractAddr = walletAddress?.startsWith('C') ? walletAddress : undefined;
+                const balances = await getBalances(fpAddress, contractAddr);
                 return JSON.stringify(balances);
             }
             case 'build_swap': {

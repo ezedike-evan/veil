@@ -53,7 +53,9 @@ export default function TokenPage() {
   const issuer = searchParams.get('issuer') ?? null
   const meta   = TOKEN_META[code] ?? { name: code, logo: '', color: 'var(--gold)', bg: 'rgba(253,218,36,0.12)' }
 
-  const [balance,      setBalance]      = useState<string | null>(null)
+  const [balance,         setBalance]         = useState<string | null>(null)
+  const [contractBalance, setContractBalance] = useState<string | null>(null)
+  const [feePayerBalance, setFeePayerBalance] = useState<string | null>(null)
   const [transactions, setTransactions] = useState<TxRecord[]>([])
   const [selectedTx,   setSelectedTx]   = useState<TxRecord | null>(null)
   const [loading,      setLoading]      = useState(true)
@@ -83,11 +85,13 @@ export default function TokenPage() {
     try {
       // ── Balance ────────────────────────────────────────────────────────────
       if (code === 'XLM') {
-        // Combine fee-payer + contract balance
+        // Query contract XLM (C... via Soroban RPC) and fee-payer XLM (G... via Horizon) separately
         let contractXlm = 0
+        let fpXlm = 0
+
         if (walletAddress) {
           try {
-            const rpcServer = new SorobanRpc.Server('https://soroban-testnet.stellar.org')
+            const rpcServer   = new SorobanRpc.Server('https://soroban-testnet.stellar.org')
             const sacAddress  = Asset.native().contractId(Networks.TESTNET)
             const sacContract = new Contract(sacAddress)
             const dummyKp     = Keypair.random()
@@ -102,9 +106,15 @@ export default function TokenPage() {
             }
           } catch {}
         }
-        const account  = await horizonServer.loadAccount(signerPublicKey)
-        const native   = account.balances.find((b: any) => b.asset_type === 'native')
-        const fpXlm    = native ? parseFloat(native.balance) : 0
+
+        try {
+          const account = await horizonServer.loadAccount(signerPublicKey)
+          const native  = account.balances.find((b: any) => b.asset_type === 'native')
+          fpXlm = native ? parseFloat(native.balance) : 0
+        } catch {}
+
+        setContractBalance(contractXlm.toFixed(7))
+        setFeePayerBalance(fpXlm.toFixed(7))
         setBalance((contractXlm + fpXlm).toFixed(7))
       } else {
         const account = await horizonServer.loadAccount(signerPublicKey)
@@ -253,6 +263,38 @@ export default function TokenPage() {
               BALANCE HISTORY
             </div>
             <Sparkline points={sparkPoints} color={meta.color === 'var(--gold)' ? '#FDDA24' : (code === 'USDC' ? '#2775CA' : '#FFFFFF')} />
+          </div>
+        )}
+
+        {/* ── XLM balance breakdown ── */}
+        {!loading && code === 'XLM' && (contractBalance !== null || feePayerBalance !== null) && (
+          <div className="card" style={{ marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ fontSize: '0.6875rem', fontFamily: 'Anton, Impact, sans-serif', color: 'rgba(246,247,248,0.3)', letterSpacing: '0.08em' }}>
+              BALANCE BREAKDOWN
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--off-white)', fontWeight: 500 }}>Smart wallet</p>
+                <p style={{ fontSize: '0.6875rem', color: 'rgba(246,247,248,0.35)', fontFamily: 'Inconsolata, monospace', marginTop: '0.125rem' }}>
+                  Soroban contract (C…)
+                </p>
+              </div>
+              <span style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.9375rem' }}>
+                {contractBalance !== null ? parseFloat(contractBalance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : '—'} XLM
+              </span>
+            </div>
+            <div style={{ height: '1px', background: 'var(--border-dim)' }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--off-white)', fontWeight: 500 }}>Fee-payer account</p>
+                <p style={{ fontSize: '0.6875rem', color: 'rgba(246,247,248,0.35)', fontFamily: 'Inconsolata, monospace', marginTop: '0.125rem' }}>
+                  Classic account (G…)
+                </p>
+              </div>
+              <span style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.9375rem' }}>
+                {feePayerBalance !== null ? parseFloat(feePayerBalance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : '—'} XLM
+              </span>
+            </div>
           </div>
         )}
 

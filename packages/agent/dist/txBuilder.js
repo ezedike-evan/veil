@@ -1,4 +1,4 @@
-import { Horizon, TransactionBuilder, Networks, Operation, Asset, BASE_FEE, } from '@stellar/stellar-sdk';
+import { Horizon, TransactionBuilder, Networks, Operation, Asset, BASE_FEE, rpc as SorobanRpc, Contract, Account, Keypair, nativeToScVal, scValToNative, } from '@stellar/stellar-sdk';
 const horizonUrl = process.env.HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
 const networkPassphrase = process.env.STELLAR_NETWORK === 'mainnet'
     ? Networks.PUBLIC
@@ -67,16 +67,56 @@ export async function buildPayment(input) {
     return tx.toXDR();
 }
 /**
- * Fetch XLM + token balances for a wallet address.
+ * Fetch XLM + token balances.
+ * @param feePayerAddress  G... classic account (Horizon)
+ * @param contractAddress  C... Soroban wallet contract (Soroban RPC) — optional
+ *
+ * Returns balances with XLM split into:
+ *   XLM_contract   — native XLM held in the smart wallet contract
+ *   XLM_feepayer   — native XLM in the fee-payer classic account
+ *   XLM            — combined total
+ *   plus any token balances (e.g. USDC:ISSUER)
  */
-export async function getBalances(address) {
-    const account = await horizon.loadAccount(address);
+export async function getBalances(feePayerAddress, contractAddress) {
     const result = {};
+    // ── 1. Fee-payer G... account via Horizon ────────────────────────────────
+    const account = await horizon.loadAccount(feePayerAddress);
+    let feePayerXlm = 0;
     for (const balance of account.balances) {
-        const key = balance.asset_type === 'native'
-            ? 'XLM'
-            : `${balance.asset_code}:${balance.asset_issuer}`;
-        result[key] = balance.balance;
+        if (balance.asset_type === 'native') {
+            feePayerXlm = parseFloat(balance.balance);
+            result['XLM_feepayer'] = balance.balance;
+        }
+        else {
+            const key = `${balance.asset_code}:${balance.asset_issuer}`;
+            result[key] = balance.balance;
+        }
     }
+    // ── 2. Smart wallet C... contract via Soroban RPC ────────────────────────
+    let contractXlm = 0;
+    if (contractAddress) {
+        try {
+            const rpcUrl = process.env.SOROBAN_RPC_URL ?? 'https://soroban-testnet.stellar.org';
+            const rpc = new SorobanRpc.Server(rpcUrl);
+            const sacAddress = Asset.native().contractId(networkPassphrase === Networks.PUBLIC ? 'Public Global Stellar Network ; September 2015' : networkPassphrase);
+            const sacContract = new Contract(sacAddress);
+            const dummyKp = Keypair.random();
+            const dummyAcct = new Account(dummyKp.publicKey(), '0');
+            const tx = new TransactionBuilder(dummyAcct, { fee: BASE_FEE, networkPassphrase })
+                .addOperation(sacContract.call('balance', nativeToScVal(contractAddress, { type: 'address' })))
+                .setTimeout(30)
+                .build();
+            const sim = await rpc.simulateTransaction(tx);
+            if (!SorobanRpc.Api.isSimulationError(sim)) {
+                const ret = sim.result;
+                if (ret)
+                    contractXlm = Number(scValToNative(ret.retval)) / 10_000_000;
+            }
+            result['XLM_contract'] = contractXlm.toFixed(7);
+        }
+        catch { /* contract has no balance yet */ }
+    }
+    // ── 3. Combined XLM total ─────────────────────────────────────────────────
+    result['XLM'] = (feePayerXlm + contractXlm).toFixed(7);
     return result;
 }
