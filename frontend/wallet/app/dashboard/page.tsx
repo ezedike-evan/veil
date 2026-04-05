@@ -27,6 +27,7 @@ export default function DashboardPage() {
   const [assets, setAssets]               = useState<WalletAsset[]>([])
   const [transactions, setTransactions]   = useState<TxRecord[]>([])
   const [selectedTx, setSelectedTx]       = useState<TxRecord | null>(null)
+  const [txFilter, setTxFilter]           = useState<'all' | 'transfers' | 'swaps'>('all')
   const [loading, setLoading]             = useState(true)
   const [isFunding, setIsFunding]         = useState(false)
   const [fundingError, setFundingError]   = useState<string | null>(null)
@@ -93,20 +94,28 @@ export default function DashboardPage() {
       : (localStorage.getItem('veil_signer_public_key') || null)
 
     let feePayerXlm = 0
+    let otherAssets: WalletAsset[] = []
     let txRecords: TxRecord[] = []
 
     if (signerPublicKey) {
       try {
         const account = await horizonServer.loadAccount(signerPublicKey)
-        const native  = account.balances.find(b => b.asset_type === 'native')
+        const native  = account.balances.find((b: any) => b.asset_type === 'native')
         feePayerXlm   = native ? parseFloat(native.balance) : 0
+
+        // All non-XLM balances (e.g. USDC from swaps)
+        otherAssets = (account.balances as any[])
+          .filter(b => b.asset_type !== 'native' && parseFloat(b.balance) > 0)
+          .map(b => ({ code: b.asset_code, issuer: b.asset_issuer, balance: b.balance }))
 
         // Transaction history (fee-payer account)
         type HorizonOp = {
           id: string; type: string
           from?: string; to?: string; funder?: string; account?: string
           amount?: string; starting_balance?: string
-          asset_type?: string; asset_code?: string
+          asset_type?: string; asset_code?: string; asset_issuer?: string
+          source_amount?: string
+          source_asset_type?: string; source_asset_code?: string
           created_at: string; transaction_hash: string
           transaction?: { memo?: string }
         }
@@ -119,7 +128,7 @@ export default function DashboardPage() {
           .call()
 
         txRecords = (payments.records as HorizonOp[])
-          .filter(p => p.type === 'payment' || p.type === 'create_account')
+          .filter(p => p.type === 'payment' || p.type === 'create_account' || p.type === 'path_payment_strict_send')
           .map(p => {
             if (p.type === 'create_account') {
               return {
@@ -132,9 +141,24 @@ export default function DashboardPage() {
                 hash:         p.transaction_hash,
               }
             }
+            if (p.type === 'path_payment_strict_send') {
+              const srcAsset = p.source_asset_type === 'native' ? 'XLM' : (p.source_asset_code ?? 'XLM')
+              const dstAsset = p.asset_type === 'native' ? 'XLM' : (p.asset_code ?? '')
+              return {
+                id:           p.id,
+                type:         'swapped' as const,
+                amount:       p.source_amount ?? '0',
+                asset:        srcAsset,
+                destAmount:   p.amount ?? '0',
+                destAsset:    dstAsset,
+                counterparty: 'Stellar DEX',
+                timestamp:    Math.floor(new Date(p.created_at).getTime() / 1000),
+                hash:         p.transaction_hash,
+              }
+            }
             return {
               id:           p.id,
-              type:         p.from === signerPublicKey ? 'sent' : 'received',
+              type:         p.from === signerPublicKey ? 'sent' as const : 'received' as const,
               amount:       p.amount ?? '0',
               asset:        p.asset_type === 'native' ? 'XLM' : (p.asset_code ?? ''),
               counterparty: p.from === signerPublicKey ? (p.to ?? '') : (p.from ?? ''),
@@ -197,7 +221,10 @@ export default function DashboardPage() {
 
     // ── 4. Combine and display ───────────────────────────────────────────────
     const totalXlm = (contractXlm + feePayerXlm).toFixed(7)
-    setAssets([{ code: 'XLM', issuer: null, balance: totalXlm }])
+    setAssets([
+      { code: 'XLM', issuer: null, balance: totalXlm },
+      ...otherAssets,
+    ])
     setTransactions(txRecords)
     setLoading(false)
   }, [walletAddress, isTestnet])
@@ -429,6 +456,31 @@ export default function DashboardPage() {
               Refresh
             </button>
           </div>
+
+          {/* Filter pills */}
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.875rem' }}>
+            {(['all', 'transfers', 'swaps'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setTxFilter(f)}
+                style={{
+                  padding: '0.3rem 0.875rem',
+                  borderRadius: '100px',
+                  border: '1px solid',
+                  fontSize: '0.75rem',
+                  fontFamily: 'Inter, sans-serif',
+                  cursor: 'pointer',
+                  transition: 'all 120ms',
+                  background: txFilter === f ? 'var(--gold)' : 'transparent',
+                  borderColor: txFilter === f ? 'var(--gold)' : 'rgba(246,247,248,0.15)',
+                  color: txFilter === f ? 'var(--near-black)' : 'rgba(246,247,248,0.5)',
+                  fontWeight: txFilter === f ? 600 : 400,
+                }}
+              >
+                {f === 'all' ? 'All' : f === 'transfers' ? 'Transfers' : 'Swaps'}
+              </button>
+            ))}
+          </div>
           {loading && (
             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
               {[1, 2, 3].map(i => (
@@ -446,46 +498,66 @@ export default function DashboardPage() {
               ))}
             </div>
           )}
-          {!loading && transactions.length === 0 && (
-            <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
-              <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)' }}>
-                No transactions yet.
-              </p>
-            </div>
-          )}
-          {transactions.length > 0 && (
-            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-              {transactions.map((tx, i) => (
-                <button
-                  key={tx.id}
-                  onClick={() => setSelectedTx(tx)}
-                  aria-label={`${tx.type === 'sent' ? 'Sent' : 'Received'} ${tx.amount} ${tx.asset}`}
-                  style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    width: '100%', padding: '0.875rem 1rem',
-                    background: 'none', border: 'none', cursor: 'pointer',
-                    borderBottom: i < transactions.length - 1 ? '1px solid var(--border-dim)' : 'none',
-                    color: 'var(--off-white)', textAlign: 'left',
-                    transition: 'background 100ms',
-                  }}
-                >
-                  <div>
-                    <p style={{ fontSize: '0.875rem', fontWeight: 500 }}>
-                      {tx.type === 'sent' ? '↑ Sent' : '↓ Received'}
-                    </p>
-                    <p style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', marginTop: '0.125rem', fontFamily: 'Inconsolata, monospace' }}>
-                      {tx.counterparty.slice(0, 6)}…{tx.counterparty.slice(-6)}
-                    </p>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <p style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.9375rem' }}>
-                      {tx.amount} {tx.asset}
-                    </p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
+          {(() => {
+            const filtered = transactions.filter(tx =>
+              txFilter === 'all' ? true :
+              txFilter === 'swaps' ? tx.type === 'swapped' :
+              tx.type !== 'swapped'
+            )
+            if (!loading && filtered.length === 0) return (
+              <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+                <p style={{ fontSize: '0.875rem', color: 'rgba(246,247,248,0.4)' }}>
+                  {transactions.length === 0 ? 'No transactions yet.' : `No ${txFilter} found.`}
+                </p>
+              </div>
+            )
+            if (filtered.length === 0) return null
+            return (
+              <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                {filtered.map((tx, i) => (
+                  <button
+                    key={tx.id}
+                    onClick={() => setSelectedTx(tx)}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      width: '100%', padding: '0.875rem 1rem',
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      borderBottom: i < filtered.length - 1 ? '1px solid var(--border-dim)' : 'none',
+                      color: 'var(--off-white)', textAlign: 'left',
+                      transition: 'background 100ms',
+                    }}
+                  >
+                    <div>
+                      <p style={{ fontSize: '0.875rem', fontWeight: 500 }}>
+                        {tx.type === 'sent' ? '↑ Sent' : tx.type === 'swapped' ? '⇄ Swap' : '↓ Received'}
+                      </p>
+                      <p style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', marginTop: '0.125rem', fontFamily: 'Inconsolata, monospace' }}>
+                        {tx.counterparty.length > 12
+                          ? `${tx.counterparty.slice(0, 6)}…${tx.counterparty.slice(-6)}`
+                          : tx.counterparty}
+                      </p>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      {tx.type === 'swapped' ? (
+                        <>
+                          <p style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.875rem' }}>
+                            -{tx.amount} {tx.asset}
+                          </p>
+                          <p style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.875rem', color: 'var(--teal)', marginTop: '0.125rem' }}>
+                            +{tx.destAmount} {tx.destAsset}
+                          </p>
+                        </>
+                      ) : (
+                        <p style={{ fontFamily: 'Inconsolata, monospace', fontSize: '0.9375rem' }}>
+                          {tx.amount} {tx.asset}
+                        </p>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )
+          })()}
         </section>
 
       </main>

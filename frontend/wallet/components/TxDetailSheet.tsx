@@ -4,13 +4,16 @@ import { useEffect } from 'react'
 
 export interface TxRecord {
   id: string
-  type: 'sent' | 'received'
+  type: 'sent' | 'received' | 'swapped'
   amount: string
   asset: string
   counterparty: string
   timestamp: number
   hash?: string
   memo?: string
+  // swap-specific
+  destAmount?: string
+  destAsset?: string
 }
 
 interface TxDetailSheetProps {
@@ -71,11 +74,18 @@ export function TxDetailSheet({ tx, onClose }: TxDetailSheetProps) {
         </h3>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-          <DetailRow label="Type" value={tx.type === 'sent' ? 'Sent' : 'Received'} />
-          <DetailRow label="Amount" value={`${tx.amount} ${tx.asset}`} />
+          <DetailRow label="Type" value={tx.type === 'sent' ? 'Sent' : tx.type === 'swapped' ? 'Swap' : 'Received'} />
+          {tx.type === 'swapped' ? (
+            <>
+              <DetailRow label="Sent" value={`${tx.amount} ${tx.asset}`} />
+              <DetailRow label="Received" value={`${tx.destAmount ?? '?'} ${tx.destAsset ?? ''}`} />
+            </>
+          ) : (
+            <DetailRow label="Amount" value={`${tx.amount} ${tx.asset}`} />
+          )}
           <DetailRow
-            label={tx.type === 'sent' ? 'To' : 'From'}
-            value={`${tx.counterparty.slice(0, 8)}...${tx.counterparty.slice(-8)}`}
+            label={tx.type === 'sent' ? 'To' : tx.type === 'swapped' ? 'Via' : 'From'}
+            value={tx.counterparty.length > 16 ? `${tx.counterparty.slice(0, 8)}...${tx.counterparty.slice(-8)}` : tx.counterparty}
             mono
           />
           <DetailRow label="Date" value={date} />
