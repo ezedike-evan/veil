@@ -117,10 +117,23 @@ export default function AgentPage() {
     setMessages((prev) => [...prev, { role: 'user', content: text }])
     setInput('')
 
+    // If fee-payer key was cleared (cache clear), warn the user before sending
+    if (!feePayerAddress) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'agent',
+          content:
+            'Your signing key is missing — this usually happens after clearing browser storage.\n\nGo to the **Dashboard** and tap **Set up fee-payer** to restore it, then come back and try again.',
+        },
+      ])
+      return
+    }
+
     wsRef.current.send(
       JSON.stringify({ type: 'chat', walletAddress, feePayerAddress, message: text }),
     )
-  }, [input, isThinking, walletAddress])
+  }, [input, isThinking, walletAddress, feePayerAddress])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {

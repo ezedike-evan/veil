@@ -61,7 +61,13 @@ export default function SwapPage() {
       const signerSecret = sessionStorage.getItem('veil_signer_secret')
       const accountAddr = signerSecret
         ? Keypair.fromSecret(signerSecret).publicKey()
-        : (localStorage.getItem('veil_signer_public_key') || _addr)
+        : (localStorage.getItem('veil_signer_public_key') || null)
+
+      if (!accountAddr || accountAddr.startsWith('C')) {
+        setErrorMsg('Signing key not found. Go to Dashboard and tap "Set up fee-payer" first.')
+        return
+      }
+
       const res = await fetch(`${horizonUrl}/accounts/${accountAddr}`)
       if (res.ok) {
         const data = await res.json()

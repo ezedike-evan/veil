@@ -65,9 +65,17 @@ export default function TokenPage() {
   const fetchData = useCallback(async () => {
     const signerSecret = sessionStorage.getItem('veil_signer_secret')
       ?? localStorage.getItem('veil_signer_secret')
-    if (!signerSecret) { router.replace('/lock'); return }
 
-    const signerPublicKey = Keypair.fromSecret(signerSecret).publicKey()
+    // Derive public key — prefer from secret, fall back to stored public key.
+    // Never redirect to /lock here; missing secret just means read-only mode.
+    let signerPublicKey: string
+    if (signerSecret) {
+      signerPublicKey = Keypair.fromSecret(signerSecret).publicKey()
+    } else {
+      const storedPubKey = localStorage.getItem('veil_signer_public_key')
+      if (!storedPubKey) { router.replace('/dashboard'); return }
+      signerPublicKey = storedPubKey
+    }
     const walletAddress   = sessionStorage.getItem('invisible_wallet_address') ?? ''
     const horizonServer   = new Server(horizonUrl)
 

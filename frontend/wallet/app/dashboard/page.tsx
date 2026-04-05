@@ -33,6 +33,7 @@ export default function DashboardPage() {
   const [isFunding, setIsFunding]         = useState(false)
   const [fundingError, setFundingError]   = useState<string | null>(null)
   const [copied, setCopied]               = useState(false)
+  const [hasFeePayerKey, setHasFeePayerKey] = useState(true)
 
   const isTestnet = process.env.NEXT_PUBLIC_NETWORK === 'testnet'
 
@@ -94,6 +95,9 @@ export default function DashboardPage() {
     const signerPublicKey = signerSecret
       ? Keypair.fromSecret(signerSecret).publicKey()
       : (localStorage.getItem('veil_signer_public_key') || null)
+
+    // Track whether fee-payer exists so we can show a recovery banner
+    setHasFeePayerKey(!!signerPublicKey)
 
     let feePayerXlm = 0
     let otherAssets: WalletAsset[] = []
@@ -334,6 +338,37 @@ export default function DashboardPage() {
             Your wallet locks automatically after 5 minutes of inactivity.
           </p>
         </div>
+
+        {/* ── Fee-payer missing banner (after cache clear) ── */}
+        {!loading && !hasFeePayerKey && (
+          <div style={{
+            marginBottom: '1.5rem',
+            padding: '1rem 1.25rem',
+            background: 'rgba(253,218,36,0.07)',
+            border: '1px solid rgba(253,218,36,0.25)',
+            borderRadius: '12px',
+          }}>
+            <p style={{ fontSize: '0.875rem', color: 'var(--off-white)', marginBottom: '0.5rem', fontWeight: 500 }}>
+              Signing key not found
+            </p>
+            <p style={{ fontSize: '0.8125rem', color: 'rgba(246,247,248,0.55)', marginBottom: '0.875rem', lineHeight: 1.5 }}>
+              Your browser storage was cleared. Tap below to set up a new fee-payer account so you can send, swap, and use the agent.
+            </p>
+            <button
+              className="btn-gold"
+              onClick={handleFund}
+              disabled={isFunding}
+              style={{ fontSize: '0.875rem', padding: '0.625rem 1.25rem' }}
+            >
+              {isFunding
+                ? <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                : 'Set up fee-payer'}
+            </button>
+            {fundingError && (
+              <p style={{ color: 'var(--teal)', fontSize: '0.75rem', marginTop: '0.625rem' }}>{fundingError}</p>
+            )}
+          </div>
+        )}
 
         {/* ── Balance Display ── */}
         <div style={{ marginBottom: '2rem' }}>
