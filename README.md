@@ -1,5 +1,10 @@
 # Veil
 
+[![CI](https://github.com/Miracle656/veil/actions/workflows/ci.yml/badge.svg)](https://github.com/Miracle656/veil/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Stellar](https://img.shields.io/badge/Stellar-Soroban-black)](https://stellar.org)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 A passkey-powered smart wallet on the Stellar Soroban blockchain. Users authenticate with their device biometrics (Face ID, fingerprint, Windows Hello) instead of seed phrases or private keys.
 
 ## How it works
