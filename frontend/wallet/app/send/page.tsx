@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Keypair, Networks, TransactionBuilder, BASE_FEE, Asset, Operation,
@@ -33,6 +33,10 @@ export default function SendPage() {
   const [showPicker, setShowPicker]   = useState(false)
   const [showScanner, setShowScanner] = useState(false)
   const [hasCamera, setHasCamera]     = useState(false)
+  const [imgError, setImgError]       = useState<string | null>(null)
+  const [imgDecoding, setImgDecoding] = useState(false)
+
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [assets, setAssets]               = useState<WalletAsset[]>([])
   const [selectedAsset, setSelectedAsset] = useState<WalletAsset | null>(null)
@@ -41,18 +45,14 @@ export default function SendPage() {
     const addr = sessionStorage.getItem('invisible_wallet_address')
     if (!addr) { router.replace('/lock'); return }
 
-    // Check camera/QR scanner availability before showing scan button
     if (typeof (window as unknown as { BarcodeDetector?: unknown }).BarcodeDetector !== 'undefined' || !!navigator.mediaDevices?.getUserMedia) {
       setHasCamera(true)
     }
 
-    // Fetch available balances — use the fee-payer G... account since
-    // Horizon doesn't support loadAccount for C... contract addresses.
     const signerPublicKey = sessionStorage.getItem('veil_signer_secret')
       ? Keypair.fromSecret(sessionStorage.getItem('veil_signer_secret')!).publicKey()
       : localStorage.getItem('veil_signer_public_key') || null
     if (!signerPublicKey || !signerPublicKey.startsWith('G')) {
-      // No fee-payer G... key available yet — default to XLM
       const xlm: WalletAsset = { code: 'XLM', issuer: null, contractId: Asset.native().contractId(Networks.TESTNET) }
       setAssets([xlm])
       setSelectedAsset(xlm)
@@ -71,15 +71,68 @@ export default function SendPage() {
       setAssets(list)
       if (list.length > 0) setSelectedAsset(list[0])
     }).catch(() => {
-      // Account not yet funded — default to XLM
       const xlm: WalletAsset = { code: 'XLM', issuer: null, contractId: Asset.native().contractId(Networks.TESTNET) }
       setAssets([xlm])
       setSelectedAsset(xlm)
     })
   }, [router])
 
+  // ── QR image upload ─────────────────────────────────────────────────────────
+  // Reads an image file, draws it to an offscreen canvas, and passes the
+  // ImageData to BarcodeDetector. Falls back to a clear error if the browser
+  // doesn't support BarcodeDetector or no QR is found in the image.
+  const handleImageFile = async (file: File) => {
+    setImgError(null)
+    setImgDecoding(true)
+
+    try {
+      // Decode image into a bitmap
+      const bitmap = await createImageBitmap(file)
+
+      // Draw onto an offscreen canvas so BarcodeDetector can read it
+      const canvas = document.createElement('canvas')
+      canvas.width  = bitmap.width
+      canvas.height = bitmap.height
+      const ctx = canvas.getContext('2d')!
+      ctx.drawImage(bitmap, 0, 0)
+      bitmap.close()
+
+      const BarcodeDetectorClass = (
+        window as unknown as { BarcodeDetector?: new (opts: { formats: string[] }) => { detect: (src: HTMLCanvasElement) => Promise<{ rawValue: string }[]> } }
+      ).BarcodeDetector
+
+      if (!BarcodeDetectorClass) {
+        setImgError('QR image scan is not supported in this browser. Please type the address manually or use the camera scanner.')
+        return
+      }
+
+      const detector = new BarcodeDetectorClass({ formats: ['qr_code'] })
+      const codes = await detector.detect(canvas)
+
+      if (codes.length === 0) {
+        setImgError('No QR code found in the image. Try a clearer photo.')
+        return
+      }
+
+      const value = codes[0].rawValue.trim()
+      const isAddress = (value.startsWith('G') || value.startsWith('C')) && value.length === 56
+      if (!isAddress) {
+        setImgError(`QR decoded "${value.slice(0, 20)}…" — doesn't look like a Stellar address.`)
+        return
+      }
+
+      setRecipient(value)
+      setImgError(null)
+    } catch {
+      setImgError('Could not read the image. Please try a different file.')
+    } finally {
+      setImgDecoding(false)
+      // Reset file input so the same file can be re-selected if needed
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
   function validateForm(): boolean {
-    // Accept both classic G... accounts and C... Soroban contract addresses
     const validAddress = (recipient.startsWith('G') || recipient.startsWith('C')) && recipient.length === 56
     if (!validAddress) return false
     if (isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) return false
@@ -101,7 +154,6 @@ export default function SendPage() {
       }
       const feePayerKp = Keypair.fromSecret(signerSecret)
 
-      // ── Step 1: Passkey verification (user must biometrically confirm) ──────
       const keyId = localStorage.getItem('invisible_wallet_key_id')
       if (!keyId) throw new Error('No passkey found. Please register the wallet first.')
       const credIdBin = atob(keyId.replace(/-/g, '+').replace(/_/g, '/'))
@@ -116,13 +168,9 @@ export default function SendPage() {
       })
       if (!assertion) throw new Error('Passkey verification was cancelled.')
 
-      // ── Step 2: Submit payment from fee-payer (which holds the XLM) ─────────
-      // The wallet contract (C...) is the auth layer; the fee-payer G... account
-      // is where funds live. We send from the fee-payer directly.
       const horizonServer = new Server('https://horizon-testnet.stellar.org')
 
       if (recipient.startsWith('G') && recipient.length === 56) {
-        // Classic account → classic payment operation (fast, cheap)
         const account = await horizonServer.loadAccount(feePayerKp.publicKey())
         const tx = new TransactionBuilder(account, {
           fee: BASE_FEE,
@@ -139,7 +187,6 @@ export default function SendPage() {
         const result = await horizonServer.submitTransaction(tx)
         setTxHash(result.hash)
       } else {
-        // Contract address → SAC transfer from fee-payer via Soroban RPC
         const rpcServer     = new SorobanRpc.Server('https://soroban-testnet.stellar.org')
         const feePayerAcct  = await rpcServer.getAccount(feePayerKp.publicKey())
         const sacContract   = new Contract(Asset.native().contractId(Networks.TESTNET))
@@ -198,7 +245,6 @@ export default function SendPage() {
 
   return (
     <div className="wallet-shell">
-      {/* Nav */}
       <nav className="wallet-nav">
         <button
           onClick={() => router.back()}
@@ -221,7 +267,6 @@ export default function SendPage() {
         {step === 'form' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
 
-            {/* Asset selector */}
             {assets.length > 1 && (
               <div>
                 <label style={{ fontSize: '0.75rem', color: 'rgba(246,247,248,0.4)', display: 'block', marginBottom: '0.5rem', fontFamily: 'Anton, Impact, sans-serif', letterSpacing: '0.06em' }}>
@@ -255,30 +300,27 @@ export default function SendPage() {
                   Choose from contacts
                 </button>
               </div>
+
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'stretch' }}>
                 <input
                   className="input-field mono"
                   type="text"
                   placeholder="G... or C..."
                   value={recipient}
-                  onChange={e => setRecipient(e.target.value.trim())}
+                  onChange={e => { setRecipient(e.target.value.trim()); setImgError(null) }}
                   autoComplete="off"
                   spellCheck={false}
                   style={{ flex: 1 }}
                 />
+
+                {/* Camera QR scan */}
                 {hasCamera && (
                   <button
                     type="button"
                     onClick={() => setShowScanner(true)}
-                    aria-label="Scan QR code"
-                    title="Scan recipient address from QR code"
-                    style={{
-                      background: 'var(--surface-md)', border: '1px solid var(--border-dim)',
-                      borderRadius: '0.5rem', cursor: 'pointer',
-                      color: 'var(--off-white)', display: 'flex',
-                      alignItems: 'center', justifyContent: 'center',
-                      width: 44, flexShrink: 0,
-                    }}
+                    aria-label="Scan QR code with camera"
+                    title="Scan QR code with camera"
+                    style={iconBtnStyle}
                   >
                     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
                       <rect x="2" y="2" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.5"/>
@@ -291,7 +333,45 @@ export default function SendPage() {
                     </svg>
                   </button>
                 )}
+
+                {/* Upload QR image */}
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="Upload QR code image"
+                  title="Upload a QR code image from your device"
+                  disabled={imgDecoding}
+                  style={{ ...iconBtnStyle, opacity: imgDecoding ? 0.5 : 1 }}
+                >
+                  {imgDecoding ? (
+                    <div className="spinner spinner-light" style={{ width: 16, height: 16 }} />
+                  ) : (
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                      <path d="M3 13v3a1 1 0 001 1h12a1 1 0 001-1v-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      <path d="M10 3v9M7 6l3-3 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  )}
+                </button>
+
+                {/* Hidden file input — accepts images only */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={e => {
+                    const file = e.target.files?.[0]
+                    if (file) handleImageFile(file)
+                  }}
+                />
               </div>
+
+              {/* Inline error for image decode failures */}
+              {imgError && (
+                <p style={{ fontSize: '0.75rem', color: 'var(--teal)', marginTop: '0.375rem', lineHeight: 1.4 }}>
+                  {imgError}
+                </p>
+              )}
             </div>
 
             <div>
@@ -426,6 +506,21 @@ export default function SendPage() {
       )}
     </div>
   )
+}
+
+// Shared style for the small icon buttons next to the address field
+const iconBtnStyle: React.CSSProperties = {
+  background: 'var(--surface-md)',
+  border: '1px solid var(--border-dim)',
+  borderRadius: '0.5rem',
+  cursor: 'pointer',
+  color: 'var(--off-white)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 44,
+  flexShrink: 0,
+  transition: 'opacity 0.15s',
 }
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
