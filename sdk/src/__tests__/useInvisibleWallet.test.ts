@@ -256,7 +256,7 @@ describe('useInvisibleWallet', () => {
     it('returns null and sets an error when no wallet address is stored', async () => {
       const { result } = renderHook(() => useInvisibleWallet(CONFIG))
 
-      let loginResult: Awaited<ReturnType<typeof result.current.login>>
+      let loginResult!: Awaited<ReturnType<typeof result.current.login>>
       await act(async () => { loginResult = await result.current.login() })
 
       expect(loginResult).toBeNull()
@@ -274,7 +274,7 @@ describe('useInvisibleWallet', () => {
 
       const { result } = renderHook(() => useInvisibleWallet(CONFIG))
 
-      let loginResult: Awaited<ReturnType<typeof result.current.login>>
+      let loginResult!: Awaited<ReturnType<typeof result.current.login>>
       await act(async () => { loginResult = await result.current.login() })
 
       expect(loginResult).toEqual({ walletAddress: 'CEXISTING_WALLET' })
@@ -295,7 +295,7 @@ describe('useInvisibleWallet', () => {
 
       const { result } = renderHook(() => useInvisibleWallet(CONFIG))
 
-      let loginResult: Awaited<ReturnType<typeof result.current.login>>
+      let loginResult!: Awaited<ReturnType<typeof result.current.login>>
       await act(async () => { loginResult = await result.current.login() })
 
       expect(loginResult).toBeNull()
@@ -318,7 +318,7 @@ describe('useInvisibleWallet', () => {
       const { result } = renderHook(() => useInvisibleWallet(CONFIG))
       const payload = new Uint8Array(32).fill(9)
 
-      let sig: Awaited<ReturnType<typeof result.current.signAuthEntry>>
+      let sig!: Awaited<ReturnType<typeof result.current.signAuthEntry>>
       await act(async () => { sig = await result.current.signAuthEntry(payload) })
 
       expect(sig).not.toBeNull()
