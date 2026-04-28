@@ -50,24 +50,7 @@ export async function sweepContractBalance(
     throw new Error('Contract balance is zero — nothing to sweep')
   }
 
-  // 2. Fetch wallet contract nonce (needed as sigVec[4] in __check_auth)
-  const nonceTx = new TransactionBuilder(new Account(dummyKp.publicKey(), '1'), {
-    fee: BASE_FEE,
-    networkPassphrase,
-  })
-    .addOperation(new Contract(contractAddress).call('get_nonce'))
-    .setTimeout(30)
-    .build()
-
-  const nonceSim = await rpc.simulateTransaction(nonceTx)
-  if (SorobanRpc.Api.isSimulationError(nonceSim)) {
-    throw new Error(`Nonce fetch failed: ${nonceSim.error}`)
-  }
-  const nonceSimResult = (nonceSim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result
-  if (!nonceSimResult) throw new Error('No nonce result from simulation')
-  const contractNonce = scValToNative(nonceSimResult.retval) as bigint
-
-  // 3. Build SAC.transfer(C..., G..., fullBalance) using the real fee-payer account
+  // 2. Build SAC.transfer(C..., G..., fullBalance) using the real fee-payer account
   const feePayerAcct = await rpc.getAccount(feePayerKeypair.publicKey())
   const tx = new TransactionBuilder(feePayerAcct, {
     fee: BASE_FEE,
@@ -82,7 +65,7 @@ export async function sweepContractBalance(
     .setTimeout(30)
     .build()
 
-  // 4. Simulate to discover auth entries and resource footprint
+  // 3. Simulate to discover auth entries and resource footprint
   const sim = await rpc.simulateTransaction(tx)
   if (SorobanRpc.Api.isSimulationError(sim)) {
     throw new Error(`Simulation failed: ${sim.error}`)
@@ -90,9 +73,9 @@ export async function sweepContractBalance(
 
   const assembled = SorobanRpc.assembleTransaction(tx, sim).build()
 
-  // 5. Sign Soroban auth entries that require the C... contract's WebAuthn passkey.
+  // 4. Sign Soroban auth entries that require the C... contract's WebAuthn passkey.
   //    Payload = SHA-256(HashIdPreimageSorobanAuthorization XDR) — must match what the
-  //    Soroban host passes to __check_auth. sigVec[4] is the contract's monotonic nonce.
+  //    Soroban host passes to __check_auth.
   const successSim  = sim as SorobanRpc.Api.SimulateTransactionSuccessResponse
   const authEntries = successSim.result?.auth
   if (authEntries) {
@@ -127,7 +110,6 @@ export async function sweepContractBalance(
         nativeToScVal(webAuthnSig.authData,       { type: 'bytes' }),
         nativeToScVal(webAuthnSig.clientDataJSON, { type: 'bytes' }),
         nativeToScVal(webAuthnSig.signature,      { type: 'bytes' }),
-        nativeToScVal(contractNonce,              { type: 'u64' }),
       ])
 
       parsed.credentials(
@@ -143,10 +125,10 @@ export async function sweepContractBalance(
     }
   }
 
-  // 6. Sign the assembled transaction with the fee-payer keypair (pays fees)
+  // 5. Sign the assembled transaction with the fee-payer keypair (pays fees)
   assembled.sign(feePayerKeypair)
 
-  // 7. Submit to Soroban RPC and poll for confirmation
+  // 6. Submit to Soroban RPC and poll for confirmation
   const sendResult = await rpc.sendTransaction(assembled)
   if (sendResult.status === 'ERROR') {
     throw new Error(

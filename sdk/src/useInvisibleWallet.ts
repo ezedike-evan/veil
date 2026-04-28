@@ -819,26 +819,9 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
 
             const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
 
-            // Fetch wallet contract nonce (required as sigVec[4] in __check_auth)
-            const nonceDummyKp = Keypair.random();
-            const nonceTx = new TransactionBuilder(new Account(nonceDummyKp.publicKey(), '0'), {
-                fee: BASE_FEE,
-                networkPassphrase,
-            })
-                .addOperation(walletContract.call('get_nonce'))
-                .setTimeout(30)
-                .build();
-            const nonceSim = await server.simulateTransaction(nonceTx);
-            if (SorobanRpc.Api.isSimulationError(nonceSim)) {
-                throw new Error(`Nonce fetch failed: ${nonceSim.error}`);
-            }
-            const nonceSimResult = (nonceSim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
-            if (!nonceSimResult) throw new Error('No nonce result from simulation');
-            const contractNonce = scValToNative(nonceSimResult.retval) as bigint;
-
             // Sign auth entries that require the wallet's WebAuthn authorization.
             // Payload = SHA-256(HashIdPreimageSorobanAuthorization XDR) — matches what the
-            // Soroban host passes to __check_auth. sigVec[4] is the contract's monotonic nonce.
+            // Soroban host passes to __check_auth.
             const successSim = sim as SorobanRpc.Api.SimulateTransactionSuccessResponse;
             const authEntries = successSim.result?.auth;
             if (authEntries) {
@@ -873,7 +856,6 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
                         nativeToScVal(webAuthnSig.authData, { type: 'bytes' }),
                         nativeToScVal(webAuthnSig.clientDataJSON, { type: 'bytes' }),
                         nativeToScVal(webAuthnSig.signature, { type: 'bytes' }),
-                        nativeToScVal(contractNonce, { type: 'u64' }),
                     ]);
 
                     parsed.credentials(
@@ -1171,26 +1153,9 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
 
             const assembled = SorobanRpc.assembleTransaction(tx, sim).build();
 
-            // Fetch wallet contract nonce (required as sigVec[4] in __check_auth)
-            const nonceDummyKp = Keypair.random();
-            const nonceTx = new TransactionBuilder(new Account(nonceDummyKp.publicKey(), '0'), {
-                fee: BASE_FEE,
-                networkPassphrase,
-            })
-                .addOperation(walletContract.call('get_nonce'))
-                .setTimeout(30)
-                .build();
-            const nonceSim = await server.simulateTransaction(nonceTx);
-            if (SorobanRpc.Api.isSimulationError(nonceSim)) {
-                throw new Error(`Nonce fetch failed: ${nonceSim.error}`);
-            }
-            const nonceSimResult = (nonceSim as SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
-            if (!nonceSimResult) throw new Error('No nonce result from simulation');
-            const contractNonce = scValToNative(nonceSimResult.retval) as bigint;
-
             // Sign auth entries that require the wallet's WebAuthn authorization.
             // Payload = SHA-256(HashIdPreimageSorobanAuthorization XDR) — matches what the
-            // Soroban host passes to __check_auth. sigVec[4] is the contract's monotonic nonce.
+            // Soroban host passes to __check_auth.
             const successSim = sim as SorobanRpc.Api.SimulateTransactionSuccessResponse;
             const authEntries = successSim.result?.auth;
             if (authEntries) {
@@ -1225,7 +1190,6 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
                         nativeToScVal(webAuthnSig.authData, { type: 'bytes' }),
                         nativeToScVal(webAuthnSig.clientDataJSON, { type: 'bytes' }),
                         nativeToScVal(webAuthnSig.signature, { type: 'bytes' }),
-                        nativeToScVal(contractNonce, { type: 'u64' }),
                     ]);
 
                     parsed.credentials(
