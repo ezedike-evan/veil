@@ -131,16 +131,18 @@ veil/
 
 ## Services
 
-| Service | Description | Deployed |
-|---|---|---|
-| **Lens** | Price oracle — SDEX + AMM prices, x402 micropayment gated | https://lens-ldtu.onrender.com |
-| **Wraith** | SAC event indexer — transfer history for Soroban wallets | https://wraith-0jo1.onrender.com |
-| **Agent** | Claude AI agent — chat, swap, payments, balance queries | https://veil-agent.onrender.com |
+| Service    | Description                                               | Deployed                           |
+| ---------- | --------------------------------------------------------- | ---------------------------------- |
+| **Lens**   | Price oracle — SDEX + AMM prices, x402 micropayment gated | <https://lens-ldtu.onrender.com>   |
+| **Wraith** | SAC event indexer — transfer history for Soroban wallets  | <https://wraith-0jo1.onrender.com> |
+| **Agent**  | Claude AI agent — chat, swap, payments, balance queries   | <https://veil-agent.onrender.com>  |
 
-### Lens (unified_price_api)
+### Lens (unified\_price\_api)
+
 Fastify/Prisma/Postgres oracle that ingests SDEX trades and AMM pool snapshots from Stellar. Exposes `GET /price/:assetA/:assetB` gated behind x402 micropayments (auto-paid by the agent). Deployed on Render, data stored in Supabase PostgreSQL.
 
 ### Wraith
+
 Express/Prisma/Postgres indexer for Stellar Soroban contract events. Fills the Horizon gap for incoming SAC token transfers that classic payment endpoints miss.
 
 Key endpoint: `GET /transfers/address/:address?direction=incoming|outgoing|both&limit=N`
@@ -148,31 +150,32 @@ Key endpoint: `GET /transfers/address/:address?direction=incoming|outgoing|both&
 Additional endpoints: `GET /summary/:address`, `GET /transfers/address/:address` with `fromDate`/`toDate`/`eventType` filters.
 
 ### Agent (packages/agent)
+
 Claude-powered AI agent embedded in the Veil wallet. Connects via WebSocket. Tools:
 
-| Tool | Description |
-|---|---|
-| `get_price` | Fetches live SDEX/AMM price via Lens (x402 auto-paid) |
-| `get_wallet_balance` | Fetches XLM + token balances via Horizon |
-| `get_transfer_history` | Fetches transfer history via Wraith + Horizon payments |
-| `build_swap` | Builds unsigned path payment XDR (auto-adds trustline if missing) |
-| `build_payment` | Builds unsigned payment XDR |
-| `request_user_approval` | Sends transaction to wallet UI for passkey biometric approval |
+| Tool                    | Description                                                       |
+| ----------------------- | ----------------------------------------------------------------- |
+| `get_price`             | Fetches live SDEX/AMM price via Lens (x402 auto-paid)             |
+| `get_wallet_balance`    | Fetches XLM + token balances via Horizon                          |
+| `get_transfer_history`  | Fetches transfer history via Wraith + Horizon payments            |
+| `build_swap`            | Builds unsigned path payment XDR (auto-adds trustline if missing) |
+| `build_payment`         | Builds unsigned payment XDR                                       |
+| `request_user_approval` | Sends transaction to wallet UI for passkey biometric approval     |
 
 All transactions built by the agent are returned unsigned to the frontend, where the user approves with Face ID / fingerprint before the transaction is signed and submitted.
 
 ## Tech stack
 
-| Layer | Technology |
-|---|---|
-| Smart contract | Rust, Soroban SDK, p256 crate (ECDSA), sha2 |
-| Authentication | WebAuthn / FIDO2 (ES256 / P-256) |
-| Client SDK | TypeScript, React hooks, @stellar/stellar-sdk v15, Web Crypto API |
-| Wallet app | Next.js 14 App Router, next-pwa |
-| AI Agent | Node.js, Claude claude-sonnet-4-6, Anthropic SDK, WebSocket |
-| Price oracle | Fastify, Prisma, Postgres (Supabase), x402 micropayments |
-| Indexer | Express, Prisma, Postgres (Render managed), stellar-sdk v15 |
-| Blockchain | Stellar (Soroban smart contracts, testnet) |
+| Layer          | Technology                                                        |
+| -------------- | ----------------------------------------------------------------- |
+| Smart contract | Rust, Soroban SDK, p256 crate (ECDSA), sha2                       |
+| Authentication | WebAuthn / FIDO2 (ES256 / P-256)                                  |
+| Client SDK     | TypeScript, React hooks, @stellar/stellar-sdk v15, Web Crypto API |
+| Wallet app     | Next.js 14 App Router, next-pwa                                   |
+| AI Agent       | Node.js, Claude claude-sonnet-4-6, Anthropic SDK, WebSocket       |
+| Price oracle   | Fastify, Prisma, Postgres (Supabase), x402 micropayments          |
+| Indexer        | Express, Prisma, Postgres (Render managed), stellar-sdk v15       |
+| Blockchain     | Stellar (Soroban smart contracts, testnet)                        |
 
 ## Getting started
 
@@ -215,6 +218,7 @@ npm start
 ```
 
 The agent exposes:
+
 - `GET /health` — health check
 - `WS /` — WebSocket chat endpoint (expects `{ type: 'chat', walletAddress, feePayerAddress, message }`)
 
@@ -254,12 +258,12 @@ function App() {
 
 The contract's `__check_auth` expects the signature field to be a `Vec<Val>` with four elements:
 
-| Index | Type | Description |
-|---|---|---|
-| 0 | `BytesN<65>` | Uncompressed P-256 public key (`0x04 \|\| x \|\| y`) |
-| 1 | `Bytes` | WebAuthn `authenticatorData` |
-| 2 | `Bytes` | WebAuthn `clientDataJSON` (must contain `base64url(signature_payload)` as challenge) |
-| 3 | `BytesN<64>` | Raw P-256 ECDSA signature (`r \|\| s`) |
+| Index | Type         | Description                                                                          |
+| ----- | ------------ | ------------------------------------------------------------------------------------ |
+| 0     | `BytesN<65>` | Uncompressed P-256 public key (`0x04 \|\| x \|\| y`)                                 |
+| 1     | `Bytes`      | WebAuthn `authenticatorData`                                                         |
+| 2     | `Bytes`      | WebAuthn `clientDataJSON` (must contain `base64url(signature_payload)` as challenge) |
+| 3     | `BytesN<64>` | Raw P-256 ECDSA signature (`r \|\| s`)                                               |
 
 ## Roadmap
 
@@ -278,3 +282,7 @@ The contract's `__check_auth` expects the signature field to be a `Vec<Val>` wit
 ## License
 
 MIT
+
+<br />
+
+Thank you 
