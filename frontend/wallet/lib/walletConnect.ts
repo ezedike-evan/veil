@@ -15,6 +15,7 @@ import {
   Account,
   Contract,
   BASE_FEE,
+  Operation,
 } from '@stellar/stellar-sdk'
 
 async function getWalletNonce(
@@ -295,7 +296,29 @@ async function signXdrPayload(
     }
   }
 
-  const assembled = SorobanRpc.assembleTransaction(tx, sim).build()
+  // Re-simulate with signed auth entries embedded so the simulator runs in
+  // `enforce` mode and produces a footprint that includes the wallet
+  // contract's instance storage that __check_auth reads.
+  const ihfOp = tx.operations[0] as Operation.InvokeHostFunction
+  const feePayerAcct = await rpc.getAccount(feePayerKeypair.publicKey())
+  const signedTx = new TransactionBuilder(feePayerAcct, {
+    fee: BASE_FEE,
+    networkPassphrase: network.networkPassphrase,
+  })
+    .addOperation(Operation.invokeHostFunction({
+      func:   ihfOp.func,
+      auth:   authEntries ?? [],
+      source: ihfOp.source,
+    }))
+    .setTimeout(30)
+    .build()
+
+  const sim2 = await rpc.simulateTransaction(signedTx)
+  if (SorobanRpc.Api.isSimulationError(sim2)) {
+    throw new Error(`Re-simulation (enforce mode) failed: ${sim2.error}`)
+  }
+
+  const assembled = SorobanRpc.assembleTransaction(signedTx, sim2).build()
   assembled.sign(feePayerKeypair)
   return assembled.toXDR()
 }

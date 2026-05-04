@@ -1,7 +1,7 @@
 import {
   Keypair, rpc as SorobanRpc, Contract, Account,
   TransactionBuilder, BASE_FEE, Asset, nativeToScVal, scValToNative, xdr,
-  Address,
+  Address, Operation,
 } from '@stellar/stellar-sdk'
 import type { WebAuthnSignature } from '@veil/sdk'
 
@@ -240,12 +240,37 @@ export async function sweepContractBalance(
     }
   }
 
-  // 5. Assemble NOW — sim.result.auth already has signed credentials above.
-  //    assembleTransaction reads from sim at call time; calling it before
-  //    signing would embed unsigned credentials in the transaction.
-  const assembled = SorobanRpc.assembleTransaction(tx, sim).build()
+  // 5. Re-build the tx with the signed auth entries embedded, then re-simulate.
+  //    The first simulation ran in `recording` auth mode, which DOESN'T execute
+  //    __check_auth — so its footprint doesn't include the wallet contract's
+  //    instance storage that __check_auth reads (signers / rp_id / origin /
+  //    nonce). Submitting with that footprint trips
+  //    "trying to access contract instance outside of the footprint".
+  //
+  //    Re-simulating with signed credentials puts the simulator into `enforce`
+  //    mode, which actually runs __check_auth and discovers all the storage
+  //    reads → produces an accurate footprint and resource fee.
+  const ihfOp = tx.operations[0] as Operation.InvokeHostFunction
+  const feePayerAcct2 = await rpc.getAccount(feePayerKeypair.publicKey())
+  const signedTx = new TransactionBuilder(feePayerAcct2, {
+    fee: BASE_FEE,
+    networkPassphrase,
+  })
+    .addOperation(Operation.invokeHostFunction({
+      func:   ihfOp.func,
+      auth:   authEntries ?? [],
+      source: ihfOp.source,
+    }))
+    .setTimeout(30)
+    .build()
 
-  // 6. Sign the assembled transaction with the fee-payer keypair (pays fees)
+  const sim2 = await rpc.simulateTransaction(signedTx)
+  if (SorobanRpc.Api.isSimulationError(sim2)) {
+    throw new Error(`Re-simulation (enforce mode) failed: ${sim2.error}`)
+  }
+
+  // 6. Assemble using sim2 (correct footprint + fees) and sign with fee-payer
+  const assembled = SorobanRpc.assembleTransaction(signedTx, sim2).build()
   assembled.sign(feePayerKeypair)
 
   // 6. Submit to Soroban RPC and poll for confirmation
