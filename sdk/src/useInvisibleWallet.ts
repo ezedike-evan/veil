@@ -108,12 +108,54 @@ export type WebAuthnSignature = {
     signature: Uint8Array;
 };
 
+/**
+ * Where the WebAuthn credential lives.
+ *
+ * - `platform`       — a device-bound passkey (Touch ID, Windows Hello, …).
+ * - `cross-platform` — a roaming/portable FIDO2 security key (YubiKey, etc.)
+ *                      that can sign from any device it is plugged into.
+ */
+export type AuthenticatorAttachment = 'platform' | 'cross-platform';
+
+/** Optional knobs for register(). */
+export type RegisterOptions = {
+    /**
+     * Request a specific authenticator type. Pass `cross-platform` to enrol a
+     * roaming FIDO2 security key as a portable signer rather than a device-bound
+     * platform passkey. Defaults to letting the platform decide.
+     */
+    authenticatorAttachment?: AuthenticatorAttachment;
+};
+
+/**
+ * A roaming (cross-platform) credential, persisted independently of platform
+ * passkeys so it can be identified and used as a portable signer across devices.
+ */
+export type PortableSigner = {
+    /** Base64url-encoded credential ID of the roaming key. */
+    credentialId: string;
+    /** Hex-encoded uncompressed P-256 public key (65 bytes). */
+    publicKey: string;
+    /** Always `cross-platform` for a portable signer. */
+    authenticatorAttachment: 'cross-platform';
+    /** Transport hints (usb/nfc/ble/hybrid) used to prompt for the key. */
+    transports: string[];
+};
+
 /** Result returned by a successful register() call. */
 export type RegisterResult = {
     /** The deterministically computed contract address of the new wallet ("C..."). */
     walletAddress: string;
     /** The uncompressed P-256 public key bytes (65 bytes). */
     publicKeyBytes: Uint8Array;
+    /** The authenticator type the credential was created with, when reported. */
+    authenticatorAttachment?: AuthenticatorAttachment;
+    /**
+     * True when the credential is a roaming FIDO2 security key persisted as a
+     * portable signer (independent of platform passkeys). Optional so existing
+     * callers that don't enrol roaming keys remain source-compatible.
+     */
+    isPortableSigner?: boolean;
 };
 
 /** Result returned by a successful deploy() call. */
@@ -181,8 +223,15 @@ export type InvisibleWallet = {
     isDeployed: boolean;
     isPending: boolean;
     error: string | null;
-    /** Create a new passkey credential and compute the deterministic wallet address. */
-    register: (username?: string) => Promise<RegisterResult>;
+    /**
+     * Create a new WebAuthn credential and compute the deterministic wallet address.
+     *
+     * Pass `{ authenticatorAttachment: 'cross-platform' }` to enrol a roaming
+     * FIDO2 security key (YubiKey, etc.) as a portable signer that can sign from
+     * any device the key is plugged into. The roaming credential is persisted
+     * independently of platform passkeys — see {@link getPortableSigner}.
+     */
+    register: (username?: string, options?: RegisterOptions) => Promise<RegisterResult>;
     /**
      * Deploy the user's wallet contract on-chain via the factory.
      *
@@ -204,6 +253,12 @@ export type InvisibleWallet = {
      * @param signaturePayload  The 32-byte payload from the Soroban SorobanAuthorizationEntry.
      */
     signAuthEntry: (signaturePayload: Uint8Array) => Promise<WebAuthnSignature | null>;
+    /**
+     * Return the roaming FIDO2 credential persisted as a portable signer, or null
+     * if the active credential is a device-bound platform passkey. Stored under a
+     * dedicated key so it is identified independently of platform passkeys.
+     */
+    getPortableSigner: () => Promise<PortableSigner | null>;
     /**
      * Restore an existing wallet session from storage.
      * Verifies that the wallet contract actually exists on-chain before setting the address.
@@ -329,6 +384,9 @@ export type InvisibleWallet = {
 const POLL_INTERVAL_MS  = 1_000;
 const POLL_MAX_ATTEMPTS = 30;
 
+/** Storage key holding the roaming (cross-platform) credential as a portable signer. */
+const PORTABLE_SIGNER_KEY = 'invisible_wallet_portable_signer';
+
 /**
  * Poll server.getTransaction(hash) until the transaction leaves NOT_FOUND,
  * then return the final result. Throws if it fails or we exceed the attempt limit.
@@ -358,6 +416,21 @@ function resolveStorage(storage?: StorageAdapter): StorageAdapter {
         };
     }
     return { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+}
+
+/** Read and parse the persisted portable-signer record, or null if none/invalid. */
+async function readPortableSigner(store: StorageAdapter): Promise<PortableSigner | null> {
+    const raw = await store.getItem(PORTABLE_SIGNER_KEY);
+    if (!raw) return null;
+    try {
+        const parsed = JSON.parse(raw) as PortableSigner;
+        if (parsed && parsed.authenticatorAttachment === 'cross-platform' && parsed.credentialId) {
+            return { ...parsed, transports: parsed.transports ?? [] };
+        }
+        return null;
+    } catch {
+        return null;
+    }
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
@@ -405,7 +478,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
 
     // ── register ──────────────────────────────────────────────────────────────
 
-    const register = useCallback(async (username?: string): Promise<RegisterResult> => {
+    const register = useCallback(async (username?: string, options?: RegisterOptions): Promise<RegisterResult> => {
         setIsPending(true);
         setError(null);
         try {
@@ -417,12 +490,13 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
 
             const resolvedRpId = rpId ?? (typeof window !== 'undefined' ? window.location.hostname : 'localhost');
 
-            const { credentialId, publicKeyBytes, attestationObject, clientDataJSON } = await webAuthnProvider.create({
+            const { credentialId, publicKeyBytes, attestationObject, clientDataJSON, authenticatorAttachment, transports } = await webAuthnProvider.create({
                 challenge,
                 rpId:     resolvedRpId,
                 rpName:   'Invisible Wallet',
                 userId,
                 userName: name,
+                authenticatorAttachment: options?.authenticatorAttachment,
             });
 
             // Optional attestation verification — enforce authenticator policy.
@@ -443,13 +517,35 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
             const publicKeyHex  = bufferToHex(publicKeyBytes);
             const walletAddress = computeWalletAddress(factoryAddress, publicKeyBytes, networkPassphrase);
 
+            // Treat the credential as a portable signer when either the caller asked
+            // for a roaming key or the platform reported a cross-platform attachment.
+            const resolvedAttachment = authenticatorAttachment ?? options?.authenticatorAttachment;
+            const isPortableSigner = resolvedAttachment === 'cross-platform';
+
             await store.setItem('invisible_wallet_address',    walletAddress);
             await store.setItem('invisible_wallet_key_id',     credentialId);
             await store.setItem('invisible_wallet_public_key', publicKeyHex);
+
+            if (isPortableSigner) {
+                // Persist the roaming credential under its own key so it is stored and
+                // identified independently of platform passkeys, and so signAuthEntry
+                // can replay its transports when signing from another device.
+                const portable: PortableSigner = {
+                    credentialId,
+                    publicKey: publicKeyHex,
+                    authenticatorAttachment: 'cross-platform',
+                    transports: transports ?? [],
+                };
+                await store.setItem(PORTABLE_SIGNER_KEY, JSON.stringify(portable));
+            } else if (store.removeItem) {
+                // Clear any stale portable-signer record from a previous roaming enrolment.
+                await store.removeItem(PORTABLE_SIGNER_KEY);
+            }
+
             setAddress(walletAddress);
             setIsDeployed(false);
 
-            return { walletAddress, publicKeyBytes };
+            return { walletAddress, publicKeyBytes, authenticatorAttachment: resolvedAttachment, isPortableSigner };
 
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
@@ -459,6 +555,12 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
             setIsPending(false);
         }
     }, [factoryAddress, networkPassphrase, rpId, store, config.attestationPolicy, config.requireAttestation]);
+
+    // ── getPortableSigner ───────────────────────────────────────────────────────
+
+    const getPortableSigner = useCallback(async (): Promise<PortableSigner | null> => {
+        return readPortableSigner(store);
+    }, [store]);
 
     // ── deploy ────────────────────────────────────────────────────────────────
 
@@ -623,10 +725,15 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
                 signaturePayload.byteOffset + signaturePayload.byteLength
             ) as ArrayBuffer;
 
+            // For a roaming key, forward the stored transports so the assertion can
+            // prompt for the security key over USB/NFC/BLE on any device.
+            const portable = await readPortableSigner(store);
+
             const { authData, clientDataJSON, signature } = await webAuthnProvider.authenticate({
                 challenge,
                 credentialId: keyId,
                 rpId,
+                transports: portable?.transports,
             });
 
             const publicKeyBytes = hexToUint8Array(publicKeyHex);
@@ -1465,6 +1572,6 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
     }, [address, rpcUrl, networkPassphrase, signAuthEntry]);
 
     return useMemo(() => (
-        { address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery, approve, getAllowance, getBalance, sendPayment, outbox, replayOutbox }
-    ), [address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery, approve, getAllowance, getBalance, sendPayment, outbox, replayOutbox]);
+        { address, isDeployed, isPending, error, register, deploy, signAuthEntry, getPortableSigner, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery, approve, getAllowance, getBalance, sendPayment, outbox, replayOutbox }
+    ), [address, isDeployed, isPending, error, register, deploy, signAuthEntry, getPortableSigner, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery, approve, getAllowance, getBalance, sendPayment, outbox, replayOutbox]);
 }

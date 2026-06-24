@@ -9,6 +9,15 @@ import { extractP256PublicKey, derToRawSignature } from './utils';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Where the authenticator lives.
+ *
+ * - `platform`       — bound to this device (Touch ID, Windows Hello, a phone passkey).
+ * - `cross-platform` — a roaming/portable authenticator such as a YubiKey or other
+ *                      FIDO2 security key that can move between machines.
+ */
+export type AuthenticatorAttachment = 'platform' | 'cross-platform';
+
 export interface WebAuthnCreateResult {
     /** Base64url-encoded credential ID. */
     credentialId: string;
@@ -22,6 +31,18 @@ export interface WebAuthnCreateResult {
     attestationObject?: Uint8Array;
     /** Raw clientDataJSON bytes from the registration response, when available. */
     clientDataJSON?: Uint8Array;
+    /**
+     * Which kind of authenticator produced the credential, as reported by the
+     * platform. Used to distinguish a roaming security key (`cross-platform`)
+     * from a device-bound platform passkey.
+     */
+    authenticatorAttachment?: AuthenticatorAttachment;
+    /**
+     * Transport hints (`usb`, `nfc`, `ble`, `hybrid`, `internal`) describing how
+     * the authenticator can be reached. Persisted with a roaming credential so a
+     * later assertion on any device can prompt for the right transport.
+     */
+    transports?: string[];
 }
 
 export interface WebAuthnAssertResult {
@@ -40,19 +61,31 @@ export interface WebAuthnProvider {
         rpName: string;
         userId: Uint8Array;
         userName: string;
+        /**
+         * Request a specific authenticator type. Pass `cross-platform` to require
+         * a roaming FIDO2 security key (YubiKey, etc.). Omitted lets the platform
+         * decide (typically a device-bound platform passkey).
+         */
+        authenticatorAttachment?: AuthenticatorAttachment;
     }): Promise<WebAuthnCreateResult>;
 
     authenticate(options: {
         challenge: ArrayBuffer;
         credentialId: string;
         rpId?: string;
+        /**
+         * Transport hints persisted with the credential. Forwarded to
+         * `allowCredentials` so a roaming key prompts over the correct transport
+         * (USB/NFC/BLE) on whatever device the assertion runs on.
+         */
+        transports?: string[];
     }): Promise<WebAuthnAssertResult>;
 }
 
 // ── Browser implementation ────────────────────────────────────────────────────
 
 export const webAuthnProvider: WebAuthnProvider = {
-    async create({ challenge, rpId, rpName, userId, userName }) {
+    async create({ challenge, rpId, rpName, userId, userName, authenticatorAttachment }) {
         // Slice to ensure a plain ArrayBuffer (Uint8Array.buffer may be SharedArrayBuffer)
         const challengeBuf = challenge.buffer.slice(
             challenge.byteOffset, challenge.byteOffset + challenge.byteLength
@@ -60,6 +93,10 @@ export const webAuthnProvider: WebAuthnProvider = {
         const userIdBuf = userId.buffer.slice(
             userId.byteOffset, userId.byteOffset + userId.byteLength
         ) as ArrayBuffer;
+
+        // A roaming key is portable, so a discoverable (resident) credential is
+        // what makes it usable from a second device without re-enrolling.
+        const roaming = authenticatorAttachment === 'cross-platform';
 
         const credential = await navigator.credentials.create({
             publicKey: {
@@ -69,8 +106,9 @@ export const webAuthnProvider: WebAuthnProvider = {
                 pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
                 timeout: 60_000,
                 authenticatorSelection: {
-                    residentKey: 'preferred',
+                    residentKey: roaming ? 'required' : 'preferred',
                     userVerification: 'required',
+                    ...(authenticatorAttachment ? { authenticatorAttachment } : {}),
                 },
             },
         }) as PublicKeyCredential;
@@ -80,22 +118,35 @@ export const webAuthnProvider: WebAuthnProvider = {
         const response = credential.response as AuthenticatorAttestationResponse;
         const publicKeyBytes = await extractP256PublicKey(response);
 
+        // The platform reports the attachment actually used; fall back to what was
+        // requested so a roaming credential is still tagged when unreported.
+        const reportedAttachment =
+            (credential.authenticatorAttachment as AuthenticatorAttachment | null) ?? authenticatorAttachment;
+        const transports =
+            typeof response.getTransports === 'function' ? response.getTransports() : undefined;
+
         return {
             credentialId: credential.id,
             publicKeyBytes,
             attestationObject: new Uint8Array(response.attestationObject),
             clientDataJSON:    new Uint8Array(response.clientDataJSON),
+            authenticatorAttachment: reportedAttachment ?? undefined,
+            transports: transports && transports.length ? transports : undefined,
         };
     },
 
-    async authenticate({ challenge, credentialId, rpId }) {
+    async authenticate({ challenge, credentialId, rpId, transports }) {
         const credIdBin = atob(credentialId.replace(/-/g, '+').replace(/_/g, '/'));
         const credId = Uint8Array.from(credIdBin, c => c.charCodeAt(0));
 
         const assertion = await navigator.credentials.get({
             publicKey: {
                 challenge,
-                allowCredentials: [{ id: credId, type: 'public-key' }],
+                allowCredentials: [{
+                    id: credId,
+                    type: 'public-key',
+                    ...(transports && transports.length ? { transports: transports as AuthenticatorTransport[] } : {}),
+                }],
                 userVerification: 'required',
                 ...(rpId ? { rpId } : {}),
             },
