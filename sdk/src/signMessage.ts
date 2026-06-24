@@ -82,6 +82,7 @@ export async function verifyMessage(
         } catch {
             return false;
         }
+        if (clientData.type !== 'webauthn.get') return false;
         if (!clientData.challenge) return false;
 
         // base64url → bytes

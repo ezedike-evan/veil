@@ -57,7 +57,7 @@ export function parseCSV(csvText: string): ParseResult {
         const recipient = cols[recipientIdx] ?? '';
         const amount = cols[amountIdx] ?? '';
         const asset = cols[assetIdx] ?? '';
-        const rowIndex = rows.length;
+        const rowIndex = i;
         let rowHasError = false;
 
         if (!StrKey.isValidEd25519PublicKey(recipient)) {
@@ -133,21 +133,25 @@ export async function executePayout(
         batch: PayoutRow[],
         rowIndices: number[]
     ) => Promise<{ txHash: string; rowIndices: number[] }>,
-    onProgress?: (state: BatchState) => void
+    onProgress?: (state: BatchState) => void,
+    batchSize = 100
 ): Promise<PayoutResult> {
-    const batchSize = 100;
     const completedSet = new Set(state.completedRows);
     const failedRows: number[] = [];
     const current: BatchState = { ...state, completedRows: [...state.completedRows], txHashes: { ...state.txHashes } };
 
-    for (let i = 0; i < rows.length; i += batchSize) {
+    const batches = createBatches(rows, batchSize);
+    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+        const batch = batches[batchIdx];
+        const baseOffset = batchIdx * batchSize;
         const batchRows: PayoutRow[] = [];
         const batchIndices: number[] = [];
 
-        for (let j = i; j < Math.min(i + batchSize, rows.length); j++) {
-            if (!completedSet.has(j)) {
-                batchRows.push(rows[j]);
-                batchIndices.push(j);
+        for (let j = 0; j < batch.length; j++) {
+            const globalIdx = baseOffset + j;
+            if (!completedSet.has(globalIdx)) {
+                batchRows.push(batch[j]);
+                batchIndices.push(globalIdx);
             }
         }
 

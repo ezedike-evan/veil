@@ -130,4 +130,20 @@ describe('signMessage()', () => {
             signMessage(message, jest.fn().mockResolvedValue(null), 'cred-id')
         ).rejects.toThrow('signAuthEntry returned null');
     });
+
+    it('webauthn.create type in clientDataJSON → verify returns false', async () => {
+        const message = new TextEncoder().encode('hello veil');
+        const hash = await computeDomainHash(message);
+        const { sig, credentialId } = await generateSignedWebAuthnSig(hash);
+
+        // Tamper with the clientDataJSON to use type: 'webauthn.create' (registration ceremony)
+        const originalCDJ = JSON.parse(new TextDecoder().decode(sig.clientDataJSON));
+        const tamperedCDJ = new TextEncoder().encode(
+            JSON.stringify({ ...originalCDJ, type: 'webauthn.create' })
+        );
+        const tamperedSig = { ...sig, clientDataJSON: tamperedCDJ };
+
+        const signed = await signMessage(message, jest.fn().mockResolvedValue(tamperedSig), credentialId);
+        expect(await verifyMessage(message, signed)).toBe(false);
+    });
 });

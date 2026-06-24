@@ -71,7 +71,7 @@ const getStellarMocks = () => {
 // ── Test data ─────────────────────────────────────────────────────────────────
 
 const CONFIG = {
-    rpcUrl: 'https://horizon-testnet.stellar.org',
+    horizonUrl: 'https://horizon-testnet.stellar.org',
     networkPassphrase: 'Test SDF Network ; September 2015',
 };
 
@@ -168,6 +168,22 @@ describe('createEscrow()', () => {
             config: CONFIG,
         });
         expect(submitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws when Horizon response is missing balance_id', async () => {
+        const { submitTransaction } = getStellarMocks();
+        // Horizon returns a response without balance_id (e.g. version mismatch)
+        submitTransaction.mockResolvedValue({ hash: 'tx-hash-no-balance-id' });
+        await expect(
+            createEscrow({
+                senderKeypair: SENDER,
+                recipientAddress: 'GB5WLPFRSD2PQRQ37MP45JSUXA4BFLAHDZ3CSTIGXR4C7GOYHU3MZE2D',
+                amount: '10',
+                asset: Asset.native(),
+                claimDeadlineSeconds: 3600,
+                config: CONFIG,
+            })
+        ).rejects.toThrow('missing balance_id');
     });
 });
 
