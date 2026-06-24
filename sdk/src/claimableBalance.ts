@@ -83,7 +83,10 @@ export async function createEscrow(options: CreateEscrowOptions): Promise<Escrow
     tx.sign(senderKeypair);
 
     const result = await server.submitTransaction(tx);
-    const balanceId = (result as unknown as { balance_id: string }).balance_id ?? '';
+    const balanceId = (result as unknown as { balance_id?: string }).balance_id;
+    if (!balanceId) {
+        throw new Error('create_claimable_balance: missing balance_id in Horizon response');
+    }
 
     return {
         balanceId,

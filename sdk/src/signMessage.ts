@@ -42,21 +42,82 @@ export async function signMessage(
     };
 }
 
+/**
+ * Verify an off-chain signed message produced by signMessage().
+ *
+ * Performs full WebAuthn assertion verification:
+ *  1. Re-derives the domain-separated hash and checks it matches signed.messageHash.
+ *  2. Parses clientDataJSON and verifies challenge == base64url(hash), preventing
+ *     reuse of Soroban auth signatures for message signing and vice versa.
+ *  3. Verifies the P-256 ECDSA signature over authData || SHA-256(clientDataJSON).
+ *
+ * @param expectedCredentialId If provided, signed.credentialId must match exactly.
+ *   Without this parameter the credentialId field is informational only. Callers who
+ *   need to bind a signature to a known credential MUST pass this.
+ *
+ * Note: A SignedMessage is valid indefinitely (no nonce or expiry). Callers requiring
+ * one-time-use semantics must track consumed messageHash values themselves.
+ */
 export async function verifyMessage(
     message: Uint8Array,
-    signed: SignedMessage
+    signed: SignedMessage,
+    expectedCredentialId?: string
 ): Promise<boolean> {
     try {
+        // 1. Re-derive the domain-separated hash and compare
         const hash = await domainSeparatedHash(message);
-        const expectedHash = bufferToHex(hash);
-        if (expectedHash !== signed.messageHash) return false;
+        if (bufferToHex(hash) !== signed.messageHash) return false;
 
+        // 2. Optional credential ID check
+        if (expectedCredentialId !== undefined && signed.credentialId !== expectedCredentialId) {
+            return false;
+        }
+
+        // 3. Parse clientDataJSON and verify WebAuthn challenge matches our hash.
+        //    This prevents Soroban auth payloads from being used as message signatures.
+        const clientDataJSONBytes = hexToUint8Array(signed.clientDataJSON);
+        let clientData: { type?: string; challenge?: string };
+        try {
+            clientData = JSON.parse(new TextDecoder().decode(clientDataJSONBytes));
+        } catch {
+            return false;
+        }
+        if (!clientData.challenge) return false;
+
+        // base64url → bytes
+        const b64 = clientData.challenge.replace(/-/g, '+').replace(/_/g, '/');
+        const padding = (4 - (b64.length % 4)) % 4;
+        const challengeBytes = Uint8Array.from(
+            atob(b64 + '='.repeat(padding)),
+            c => c.charCodeAt(0)
+        );
+        if (bufferToHex(challengeBytes) !== bufferToHex(hash)) return false;
+
+        // 4. Reconstruct WebAuthn verification data: authData || SHA-256(clientDataJSON)
+        const authDataBytes = hexToUint8Array(signed.authData);
+        const clientDataHash = new Uint8Array(
+            await crypto.subtle.digest(
+                'SHA-256',
+                clientDataJSONBytes.buffer.slice(
+                    clientDataJSONBytes.byteOffset,
+                    clientDataJSONBytes.byteOffset + clientDataJSONBytes.byteLength
+                ) as ArrayBuffer
+            )
+        );
+        const verificationData = new Uint8Array(authDataBytes.length + clientDataHash.length);
+        verificationData.set(authDataBytes, 0);
+        verificationData.set(clientDataHash, authDataBytes.length);
+
+        // 5. Verify P-256 ECDSA signature over verificationData
         const publicKeyBytes = hexToUint8Array(signed.publicKey);
         const signatureBytes = hexToUint8Array(signed.signature);
 
         const cryptoKey = await crypto.subtle.importKey(
             'raw',
-            publicKeyBytes.buffer.slice(publicKeyBytes.byteOffset, publicKeyBytes.byteOffset + publicKeyBytes.byteLength) as ArrayBuffer,
+            publicKeyBytes.buffer.slice(
+                publicKeyBytes.byteOffset,
+                publicKeyBytes.byteOffset + publicKeyBytes.byteLength
+            ) as ArrayBuffer,
             { name: 'ECDSA', namedCurve: 'P-256' },
             false,
             ['verify']
@@ -65,8 +126,14 @@ export async function verifyMessage(
         return await crypto.subtle.verify(
             { name: 'ECDSA', hash: { name: 'SHA-256' } },
             cryptoKey,
-            signatureBytes.buffer.slice(signatureBytes.byteOffset, signatureBytes.byteOffset + signatureBytes.byteLength) as ArrayBuffer,
-            hash.buffer.slice(hash.byteOffset, hash.byteOffset + hash.byteLength) as ArrayBuffer
+            signatureBytes.buffer.slice(
+                signatureBytes.byteOffset,
+                signatureBytes.byteOffset + signatureBytes.byteLength
+            ) as ArrayBuffer,
+            verificationData.buffer.slice(
+                verificationData.byteOffset,
+                verificationData.byteOffset + verificationData.byteLength
+            ) as ArrayBuffer
         );
     } catch {
         return false;

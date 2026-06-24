@@ -78,8 +78,6 @@ export function parseCSV(csvText: string): ParseResult {
 
         if (!rowHasError) {
             rows.push({ recipient, amount, asset });
-        } else {
-            rows.push({ recipient, amount, asset });
         }
     }
 

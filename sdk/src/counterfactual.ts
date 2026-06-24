@@ -2,7 +2,6 @@ import { computeWalletAddress } from './utils';
 
 export type CounterfactualConfig = {
     factoryAddress: string;
-    wasmHash: string;
     networkPassphrase: string;
 };
 

@@ -499,7 +499,7 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
     // ── deriveCounterfactualAddress ───────────────────────────────────────────
 
     const deriveCounterfactualAddress = useCallback((publicKeyBytes: Uint8Array) => {
-        return _deriveCounterfactualAddress(publicKeyBytes, { factoryAddress, wasmHash: '', networkPassphrase });
+        return _deriveCounterfactualAddress(publicKeyBytes, { factoryAddress, networkPassphrase });
     }, [factoryAddress, networkPassphrase]);
 
     // ── deploy ────────────────────────────────────────────────────────────────

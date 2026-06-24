@@ -1,14 +1,14 @@
 import { signMessage, verifyMessage, SignedMessage } from '../signMessage';
 import { WebAuthnSignature } from '../useInvisibleWallet';
 
-// Helper: generate a real P-256 keypair, sign a hash, and return everything needed
+// Produces a WebAuthn-style assertion where:
+//   clientDataJSON = { type: 'webauthn.get', challenge: base64url(hash), origin }
+//   signature     = ECDSA( authData || SHA-256(clientDataJSON) )
+// This matches the real WebAuthn signing path in useInvisibleWallet.signAuthEntry().
 async function generateSignedWebAuthnSig(hash: Uint8Array): Promise<{
     sig: WebAuthnSignature;
     credentialId: string;
-    privateKey: CryptoKey;
-    publicKey: CryptoKey;
     publicKeyBytes: Uint8Array;
-    signatureBytes: Uint8Array;
 }> {
     const kp = await crypto.subtle.generateKey(
         { name: 'ECDSA', namedCurve: 'P-256' },
@@ -19,163 +19,115 @@ async function generateSignedWebAuthnSig(hash: Uint8Array): Promise<{
     const rawPub = await crypto.subtle.exportKey('raw', kp.publicKey);
     const publicKeyBytes = new Uint8Array(rawPub);
 
+    // Build WebAuthn clientDataJSON with challenge = base64url(hash)
+    const challengeB64 = btoa(String.fromCharCode(...hash))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    const clientDataObj = { type: 'webauthn.get', challenge: challengeB64, origin: 'https://veil.xyz' };
+    const clientDataJSON = new TextEncoder().encode(JSON.stringify(clientDataObj));
+
+    // Minimal 37-byte authData (rpIdHash[32] + flags[1] + signCount[4])
+    const authData = new Uint8Array(37).fill(1);
+
+    // Sign over authData || SHA-256(clientDataJSON) — real WebAuthn signing path
+    const clientDataHash = new Uint8Array(await crypto.subtle.digest('SHA-256', clientDataJSON));
+    const verificationData = new Uint8Array(authData.length + clientDataHash.length);
+    verificationData.set(authData, 0);
+    verificationData.set(clientDataHash, authData.length);
+
     const sigBuf = await crypto.subtle.sign(
         { name: 'ECDSA', hash: { name: 'SHA-256' } },
         kp.privateKey,
-        hash.buffer as ArrayBuffer
+        verificationData
     );
-    const signatureBytes = new Uint8Array(sigBuf);
 
     const sig: WebAuthnSignature = {
         publicKey: publicKeyBytes,
-        authData: new Uint8Array(37).fill(1),
-        clientDataJSON: new Uint8Array(64).fill(2),
-        signature: signatureBytes,
+        authData,
+        clientDataJSON,
+        signature: new Uint8Array(sigBuf),
     };
 
-    return {
-        sig,
-        credentialId: 'test-credential-id',
-        privateKey: kp.privateKey,
-        publicKey: kp.publicKey,
-        publicKeyBytes,
-        signatureBytes,
-    };
+    return { sig, credentialId: 'test-credential-id', publicKeyBytes };
+}
+
+function computeDomainHash(message: Uint8Array): Promise<Uint8Array> {
+    const domainBytes = new TextEncoder().encode('VEIL_SIGNED_MESSAGE_V1\n');
+    const payload = new Uint8Array(domainBytes.length + message.length);
+    payload.set(domainBytes, 0);
+    payload.set(message, domainBytes.length);
+    return crypto.subtle.digest('SHA-256', payload).then(b => new Uint8Array(b));
 }
 
 describe('signMessage()', () => {
     it('sign → verify success (full round-trip)', async () => {
         const message = new TextEncoder().encode('hello veil');
-
-        // We need to know the hash before signing, so compute it first
-        const domainBytes = new TextEncoder().encode('VEIL_SIGNED_MESSAGE_V1\n');
-        const payload = new Uint8Array(domainBytes.length + message.length);
-        payload.set(domainBytes, 0);
-        payload.set(message, domainBytes.length);
-        const hashBuf = await crypto.subtle.digest('SHA-256', payload);
-        const hash = new Uint8Array(hashBuf);
-
+        const hash = await computeDomainHash(message);
         const { sig, credentialId } = await generateSignedWebAuthnSig(hash);
 
-        const mockSignAuthEntry = jest.fn().mockResolvedValue(sig);
-        const signed = await signMessage(message, mockSignAuthEntry, credentialId);
+        const signed = await signMessage(message, jest.fn().mockResolvedValue(sig), credentialId);
 
         expect(signed.version).toBe(1);
         expect(signed.domain).toBe('VEIL_SIGNED_MESSAGE_V1');
         expect(signed.credentialId).toBe(credentialId);
-        expect(signed.messageHash).toHaveLength(64); // 32 bytes hex
+        expect(signed.messageHash).toHaveLength(64);
 
-        const valid = await verifyMessage(message, signed);
-        expect(valid).toBe(true);
+        expect(await verifyMessage(message, signed)).toBe(true);
     });
 
     it('modified message → verify returns false', async () => {
         const message = new TextEncoder().encode('hello veil');
-
-        const domainBytes = new TextEncoder().encode('VEIL_SIGNED_MESSAGE_V1\n');
-        const payload = new Uint8Array(domainBytes.length + message.length);
-        payload.set(domainBytes, 0);
-        payload.set(message, domainBytes.length);
-        const hashBuf = await crypto.subtle.digest('SHA-256', payload);
-        const hash = new Uint8Array(hashBuf);
-
+        const hash = await computeDomainHash(message);
         const { sig, credentialId } = await generateSignedWebAuthnSig(hash);
-        const mockSignAuthEntry = jest.fn().mockResolvedValue(sig);
-        const signed = await signMessage(message, mockSignAuthEntry, credentialId);
+        const signed = await signMessage(message, jest.fn().mockResolvedValue(sig), credentialId);
 
-        const modified = new TextEncoder().encode('hello veil tampered');
-        const valid = await verifyMessage(modified, signed);
-        expect(valid).toBe(false);
+        expect(await verifyMessage(new TextEncoder().encode('hello veil tampered'), signed)).toBe(false);
     });
 
     it('modified signature → verify returns false', async () => {
         const message = new TextEncoder().encode('hello veil');
-
-        const domainBytes = new TextEncoder().encode('VEIL_SIGNED_MESSAGE_V1\n');
-        const payload = new Uint8Array(domainBytes.length + message.length);
-        payload.set(domainBytes, 0);
-        payload.set(message, domainBytes.length);
-        const hashBuf = await crypto.subtle.digest('SHA-256', payload);
-        const hash = new Uint8Array(hashBuf);
-
+        const hash = await computeDomainHash(message);
         const { sig, credentialId } = await generateSignedWebAuthnSig(hash);
-        const mockSignAuthEntry = jest.fn().mockResolvedValue(sig);
-        const signed = await signMessage(message, mockSignAuthEntry, credentialId);
+        const signed = await signMessage(message, jest.fn().mockResolvedValue(sig), credentialId);
 
-        // Mutate one byte of the signature hex
         const sigHex = signed.signature;
         const mutated = sigHex.slice(0, -2) + (sigHex.slice(-2) === 'ff' ? '00' : 'ff');
         const tampered: SignedMessage = { ...signed, signature: mutated };
 
-        const valid = await verifyMessage(message, tampered);
-        expect(valid).toBe(false);
+        expect(await verifyMessage(message, tampered)).toBe(false);
     });
 
-    it('wrong credentialId → verify returns false (wrong cred in payload)', async () => {
+    it('credentialId check — expectedCredentialId mismatch returns false', async () => {
         const message = new TextEncoder().encode('hello veil');
-
-        const domainBytes = new TextEncoder().encode('VEIL_SIGNED_MESSAGE_V1\n');
-        const payload = new Uint8Array(domainBytes.length + message.length);
-        payload.set(domainBytes, 0);
-        payload.set(message, domainBytes.length);
-        const hashBuf = await crypto.subtle.digest('SHA-256', payload);
-        const hash = new Uint8Array(hashBuf);
-
+        const hash = await computeDomainHash(message);
         const { sig, credentialId } = await generateSignedWebAuthnSig(hash);
-        const mockSignAuthEntry = jest.fn().mockResolvedValue(sig);
-        const signed = await signMessage(message, mockSignAuthEntry, credentialId);
+        const signed = await signMessage(message, jest.fn().mockResolvedValue(sig), credentialId);
 
-        // Generate a second keypair and put its public key in the signed message
-        const kp2 = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-        const rawPub2 = await crypto.subtle.exportKey('raw', kp2.publicKey);
-        const pub2Hex = Array.from(new Uint8Array(rawPub2)).map(b => b.toString(16).padStart(2, '0')).join('');
-
-        const wrongCred: SignedMessage = {
-            ...signed,
-            credentialId: 'different-credential-id',
-            publicKey: pub2Hex, // different public key → verify will fail
-        };
-
-        const valid = await verifyMessage(message, wrongCred);
-        expect(valid).toBe(false);
+        // Without expectedCredentialId: passes (field is informational)
+        expect(await verifyMessage(message, signed)).toBe(true);
+        // Wrong expectedCredentialId: fails
+        expect(await verifyMessage(message, signed, 'wrong-credential-id')).toBe(false);
+        // Correct expectedCredentialId: passes
+        expect(await verifyMessage(message, signed, credentialId)).toBe(true);
     });
 
-    it('domain separation — "hello" and "VEIL_SIGNED_MESSAGE_V1\\nhello" produce different domain-separated hashes', async () => {
-        // Compute domain-separated hash for two inputs independently
+    it('domain separation — signing "hello" and "VEIL_SIGNED_MESSAGE_V1\\nhello" produce different hashes', async () => {
         const domainBytes = new TextEncoder().encode('VEIL_SIGNED_MESSAGE_V1\n');
-
-        const computeHash = async (msg: Uint8Array) => {
-            const payload = new Uint8Array(domainBytes.length + msg.length);
-            payload.set(domainBytes, 0);
-            payload.set(msg, domainBytes.length);
-            const buf = await crypto.subtle.digest('SHA-256', payload);
-            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        const computeHash = async (msg: Uint8Array): Promise<string> => {
+            const p = new Uint8Array(domainBytes.length + msg.length);
+            p.set(domainBytes, 0);
+            p.set(msg, domainBytes.length);
+            return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', p)))
+                .map(b => b.toString(16).padStart(2, '0')).join('');
         };
-
-        const msg1 = new TextEncoder().encode('hello');
-        const msg2 = new TextEncoder().encode('VEIL_SIGNED_MESSAGE_V1\nhello');
-
-        const hash1 = await computeHash(msg1);
-        const hash2 = await computeHash(msg2);
-
-        // Domain prefix shifts msg2's hash, so they must differ
-        expect(hash1).not.toBe(hash2);
+        const h1 = await computeHash(new TextEncoder().encode('hello'));
+        const h2 = await computeHash(new TextEncoder().encode('VEIL_SIGNED_MESSAGE_V1\nhello'));
+        expect(h1).not.toBe(h2);
     });
 
-    it('returns null from signAuthEntry → throws', async () => {
-        // signAuthEntry returns null after hash is computed → error thrown
+    it('signAuthEntry returns null → throws', async () => {
         const message = new TextEncoder().encode('hi');
-        const domainBytes = new TextEncoder().encode('VEIL_SIGNED_MESSAGE_V1\n');
-        const payload = new Uint8Array(domainBytes.length + message.length);
-        payload.set(domainBytes, 0);
-        payload.set(message, domainBytes.length);
-        const hashBuf = await crypto.subtle.digest('SHA-256', payload);
-        const hash = new Uint8Array(hashBuf);
-
-        const { sig, credentialId } = await generateSignedWebAuthnSig(hash);
-        // Replace with null-returning mock
-        const nullMock = jest.fn().mockResolvedValue(null);
-
-        await expect(signMessage(message, nullMock, credentialId)).rejects.toThrow('signAuthEntry returned null');
+        await expect(
+            signMessage(message, jest.fn().mockResolvedValue(null), 'cred-id')
+        ).rejects.toThrow('signAuthEntry returned null');
     });
 });

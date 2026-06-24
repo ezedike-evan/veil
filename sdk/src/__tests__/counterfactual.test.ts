@@ -13,7 +13,6 @@ const mockComputeWalletAddress = computeWalletAddress as jest.MockedFunction<typ
 
 const CONFIG = {
     factoryAddress: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-    wasmHash: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
     networkPassphrase: 'Test SDF Network ; September 2015',
 };
 
