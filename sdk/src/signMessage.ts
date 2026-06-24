@@ -97,13 +97,7 @@ export async function verifyMessage(
         // 4. Reconstruct WebAuthn verification data: authData || SHA-256(clientDataJSON)
         const authDataBytes = hexToUint8Array(signed.authData);
         const clientDataHash = new Uint8Array(
-            await crypto.subtle.digest(
-                'SHA-256',
-                clientDataJSONBytes.buffer.slice(
-                    clientDataJSONBytes.byteOffset,
-                    clientDataJSONBytes.byteOffset + clientDataJSONBytes.byteLength
-                ) as ArrayBuffer
-            )
+            await crypto.subtle.digest('SHA-256', new Uint8Array(clientDataJSONBytes))
         );
         const verificationData = new Uint8Array(authDataBytes.length + clientDataHash.length);
         verificationData.set(authDataBytes, 0);
@@ -115,10 +109,7 @@ export async function verifyMessage(
 
         const cryptoKey = await crypto.subtle.importKey(
             'raw',
-            publicKeyBytes.buffer.slice(
-                publicKeyBytes.byteOffset,
-                publicKeyBytes.byteOffset + publicKeyBytes.byteLength
-            ) as ArrayBuffer,
+            new Uint8Array(publicKeyBytes),
             { name: 'ECDSA', namedCurve: 'P-256' },
             false,
             ['verify']
@@ -127,14 +118,8 @@ export async function verifyMessage(
         return await crypto.subtle.verify(
             { name: 'ECDSA', hash: { name: 'SHA-256' } },
             cryptoKey,
-            signatureBytes.buffer.slice(
-                signatureBytes.byteOffset,
-                signatureBytes.byteOffset + signatureBytes.byteLength
-            ) as ArrayBuffer,
-            verificationData.buffer.slice(
-                verificationData.byteOffset,
-                verificationData.byteOffset + verificationData.byteLength
-            ) as ArrayBuffer
+            new Uint8Array(signatureBytes),
+            new Uint8Array(verificationData)
         );
     } catch {
         return false;
