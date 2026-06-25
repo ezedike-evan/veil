@@ -25,6 +25,7 @@ import { webAuthnProvider } from './webauthn';
 import { TransactionOutbox, type ReplayOptions, type ReplayResult } from './outbox';
 import { verifyAttestation, AttestationError, type AttestationPolicy } from './webauthn/attestation';
 import { createLocalCipher, type LocalCipher } from './crypto/prf';
+import { deriveCounterfactualAddress as _deriveCounterfactualAddress } from './counterfactual';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -205,6 +206,8 @@ export type InvisibleWallet = {
      * @param signaturePayload  The 32-byte payload from the Soroban SorobanAuthorizationEntry.
      */
     signAuthEntry: (signaturePayload: Uint8Array) => Promise<WebAuthnSignature | null>;
+    /** Derive the counterfactual wallet address for a given P-256 public key before deployment. */
+    deriveCounterfactualAddress: (publicKeyBytes: Uint8Array) => import('./counterfactual').CounterfactualAddress;
     /**
      * Restore an existing wallet session from storage.
      * Verifies that the wallet contract actually exists on-chain before setting the address.
@@ -492,6 +495,12 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
             setIsPending(false);
         }
     }, [factoryAddress, networkPassphrase, rpId, store, config.attestationPolicy, config.requireAttestation]);
+
+    // ── deriveCounterfactualAddress ───────────────────────────────────────────
+
+    const deriveCounterfactualAddress = useCallback((publicKeyBytes: Uint8Array) => {
+        return _deriveCounterfactualAddress(publicKeyBytes, { factoryAddress, networkPassphrase });
+    }, [factoryAddress, networkPassphrase]);
 
     // ── deploy ────────────────────────────────────────────────────────────────
 
@@ -1526,6 +1535,6 @@ export function useInvisibleWallet(config: WalletConfig): InvisibleWallet {
     }, [getCipher]);
 
     return useMemo(() => (
-        { address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery, approve, getAllowance, getBalance, sendPayment, outbox, replayOutbox, encryptLocal, decryptLocal, encryptionMode }
-    ), [address, isDeployed, isPending, error, register, deploy, signAuthEntry, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery, approve, getAllowance, getBalance, sendPayment, outbox, replayOutbox, encryptLocal, decryptLocal, encryptionMode]);
+        { address, isDeployed, isPending, error, register, deploy, signAuthEntry, deriveCounterfactualAddress, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery, approve, getAllowance, getBalance, sendPayment, outbox, replayOutbox, encryptLocal, decryptLocal, encryptionMode }
+    ), [address, isDeployed, isPending, error, register, deploy, signAuthEntry, deriveCounterfactualAddress, login, getNonce, addSigner, removeSigner, getSigners, setGuardian, initiateRecovery, completeRecovery, approve, getAllowance, getBalance, sendPayment, outbox, replayOutbox, encryptLocal, decryptLocal, encryptionMode]);
 }
