@@ -61,7 +61,9 @@ function spkiToP256Uncompressed(spki: Uint8Array): Uint8Array {
 // ── React Native provider ─────────────────────────────────────────────────────
 
 export const webAuthnProvider: WebAuthnProvider = {
-    async create({ challenge, rpId, rpName, userId, userName }): Promise<WebAuthnCreateResult> {
+    async create({ challenge, rpId, rpName, userId, userName, authenticatorAttachment }): Promise<WebAuthnCreateResult> {
+        const roaming = authenticatorAttachment === 'cross-platform';
+
         const result = await Passkey.create({
             challenge: uint8ArrayToB64url(challenge),
             rp:   { id: rpId, name: rpName },
@@ -73,8 +75,9 @@ export const webAuthnProvider: WebAuthnProvider = {
             pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
             timeout: 60_000,
             authenticatorSelection: {
-                residentKey:      'preferred',
+                residentKey:      roaming ? 'required' : 'preferred',
                 userVerification: 'required',
+                ...(authenticatorAttachment ? { authenticatorAttachment } : {}),
             },
         });
 
@@ -96,20 +99,29 @@ export const webAuthnProvider: WebAuthnProvider = {
         const rawAttestation: string | undefined = result.response.attestationObject;
         const rawClientData:  string | undefined = result.response.clientDataJSON;
 
+        const reportedAttachment = result.authenticatorAttachment ?? authenticatorAttachment;
+        const transports: string[] | undefined = result.response.transports;
+
         return {
             credentialId: result.id,
             publicKeyBytes,
             attestationObject: rawAttestation ? b64urlToUint8Array(rawAttestation) : undefined,
             clientDataJSON:    rawClientData  ? b64urlToUint8Array(rawClientData)  : undefined,
+            authenticatorAttachment: reportedAttachment ?? undefined,
+            transports: transports && transports.length ? transports : undefined,
         };
     },
 
-    async authenticate({ challenge, credentialId, rpId }): Promise<WebAuthnAssertResult> {
+    async authenticate({ challenge, credentialId, rpId, transports }): Promise<WebAuthnAssertResult> {
         const challengeArr = new Uint8Array(challenge);
 
         const result = await Passkey.authenticate({
             challenge:         uint8ArrayToB64url(challengeArr),
-            allowCredentials:  [{ id: credentialId, type: 'public-key' }],
+            allowCredentials:  [{
+                id: credentialId,
+                type: 'public-key',
+                ...(transports && transports.length ? { transports } : {}),
+            }],
             userVerification:  'required',
             ...(rpId ? { rpId } : {}),
         });
