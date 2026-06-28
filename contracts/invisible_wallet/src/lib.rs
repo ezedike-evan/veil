@@ -8,9 +8,12 @@ use soroban_sdk::{
 
 mod auth;
 mod storage;
+mod recovery;
 pub mod session_key;
 #[cfg(test)]
 mod auth_failure_tests;
+#[cfg(test)]
+mod guardian_test;
 use storage::{DataKey, AllowanceKey, PendingRecovery};
 
 /// Recovery timelock duration: 3 days in seconds.
@@ -56,6 +59,8 @@ pub enum WalletError {
     SessionKeyExpired           = 19,
     /// A session key call violates its ACL (wrong target, selector, or cumulative budget exceeded).
     SessionKeyAclViolation      = 20,
+    /// No recovery key is set on this wallet.
+    NoRecoveryKeySet            = 21,
 }
 
 #[contract]
@@ -558,6 +563,53 @@ impl InvisibleWallet {
     pub fn revoke_session_key(env: Env, key_id: BytesN<32>) {
         env.current_contract_address().require_auth();
         session_key::revoke(&env, &key_id);
+    }
+
+    /// Register a designated recovery key for this wallet.
+    ///
+    /// The recovery key is an Address (e.g. a cold-wallet account) that is
+    /// authorized to initiate signer rotation via `request_recovery`.
+    /// Requires current wallet signer authorization.
+    pub fn set_recovery_key(env: Env, key: Address) {
+        env.current_contract_address().require_auth();
+        recovery::set_recovery_key(&env, &key);
+    }
+
+    /// Start a 7-day recovery cooldown to replace the active signer.
+    ///
+    /// Only the designated recovery key (set via `set_recovery_key`) may call
+    /// this. After the 7-day timelock expires, anyone can call `finalize_recovery`
+    /// to complete the rotation.
+    ///
+    /// # Errors
+    /// * `NoRecoveryKeySet`       — no recovery key has been registered.
+    /// * `RecoveryAlreadyPending` — a recovery request is already in progress.
+    pub fn request_recovery(env: Env, new_signer: BytesN<65>) -> Result<(), WalletError> {
+        recovery::request_recovery(&env, new_signer)
+    }
+
+    /// Finalize a pending recovery request after the 7-day timelock has expired.
+    ///
+    /// Permissionless — anyone may call this once `ledger.timestamp > unlock_at`.
+    ///
+    /// # Errors
+    /// * `RecoveryNotPending`     — no recovery request is in progress.
+    /// * `RecoveryTimelockActive` — the 7-day cooldown has not yet elapsed.
+    pub fn finalize_recovery(env: Env) -> Result<(), WalletError> {
+        recovery::finalize_recovery(&env)
+    }
+
+    /// Cancel a pending recovery-key request.
+    ///
+    /// Only the current wallet signer (the contract itself) may cancel.
+    /// This lets a wallet owner who still holds their key abort a recovery
+    /// attempt before it is finalized.
+    ///
+    /// # Errors
+    /// * `RecoveryNotPending` — no recovery request is in progress.
+    pub fn cancel_recovery_request(env: Env) -> Result<(), WalletError> {
+        env.current_contract_address().require_auth();
+        recovery::cancel_recovery_request(&env)
     }
 }
 

@@ -28,6 +28,10 @@ pub enum DataKey {
     Nonce,
     /// Granular spending limit for a spender and token.
     Allowance(AllowanceKey),
+    /// The designated recovery key address (Address).
+    RecoveryKey,
+    /// Stores a PendingRecovery struct while a recovery-key request is in progress.
+    RecoveryKeyPending,
 }
 
 #[contracttype]
