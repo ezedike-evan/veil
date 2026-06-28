@@ -10,6 +10,7 @@ mod auth;
 mod storage;
 mod recovery;
 pub mod session_key;
+pub mod policies;
 #[cfg(test)]
 mod auth_failure_tests;
 #[cfg(test)]
@@ -61,6 +62,8 @@ pub enum WalletError {
     SessionKeyAclViolation      = 20,
     /// No recovery key is set on this wallet.
     NoRecoveryKeySet            = 21,
+    /// The per-key 24-hour spend limit has been reached.
+    SpendLimitExceeded          = 22,
 }
 
 #[contract]
@@ -335,7 +338,7 @@ impl InvisibleWallet {
         auth::verify_webauthn(
             &env,
             &signature_payload,
-            public_key,
+            public_key.clone(),
             auth_data.clone(),
             client_data_json.clone(),
             sig_bytes,
@@ -349,7 +352,20 @@ impl InvisibleWallet {
         let origin = storage::get_origin(&env).ok_or(WalletError::OriginMismatch)?;
         auth::verify_origin(&client_data_json, &origin)?;
 
-        // Step 6 — Increment nonce ONLY after all checks pass.
+        // Step 6 — Per-key 24-hour spend limit (if configured for this signer).
+        let total_amount: i128 = _auth_contexts.iter().fold(0i128, |acc, ctx| {
+            if let Context::Contract(c) = ctx {
+                if c.args.len() >= 3 {
+                    if let Ok(a) = i128::try_from_val(&env, &c.args.get(2).unwrap()) {
+                        return acc.saturating_add(a);
+                    }
+                }
+            }
+            acc
+        });
+        policies::spend_limit::enforce(&env, &public_key, total_amount)?;
+
+        // Step 7 — Increment nonce ONLY after all checks pass.
         storage::increment_nonce(&env);
 
         Ok(())
@@ -563,6 +579,32 @@ impl InvisibleWallet {
     pub fn revoke_session_key(env: Env, key_id: BytesN<32>) {
         env.current_contract_address().require_auth();
         session_key::revoke(&env, &key_id);
+    }
+
+    /// Set a 24-hour rolling spend limit for a WebAuthn signer key.
+    ///
+    /// Once set, every `__check_auth` call using `key_id` sums all context
+    /// amounts and checks the total against `cap` within a rolling 24-hour window.
+    /// Pass `cap = 0` to block all spending. Call `remove_key_spend_limit` to
+    /// lift the restriction entirely.
+    ///
+    /// Requires wallet owner authorization.
+    pub fn set_key_spend_limit(env: Env, key_id: BytesN<65>, cap: i128) {
+        env.current_contract_address().require_auth();
+        policies::spend_limit::set(&env, &key_id, cap);
+    }
+
+    /// Remove the 24-hour spend limit for a signer key (no limit = no cap).
+    ///
+    /// Requires wallet owner authorization.
+    pub fn remove_key_spend_limit(env: Env, key_id: BytesN<65>) {
+        env.current_contract_address().require_auth();
+        policies::spend_limit::remove(&env, &key_id);
+    }
+
+    /// Get the current spend window record for a signer key, if any.
+    pub fn get_key_spend_limit(env: Env, key_id: BytesN<65>) -> Option<policies::spend_limit::SpendWindow> {
+        policies::spend_limit::get(&env, &key_id)
     }
 
     /// Register a designated recovery key for this wallet.
